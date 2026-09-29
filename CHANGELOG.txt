@@ -400,3 +400,24 @@ Notes:
   - Remove legacy diskCacheEnabler.dll when installing this.
 ================================================================================
 
+
+
+2.2.0 - 2026-09-29 local candidate (parent: 4755359 / 2.1.0)
+----------------------------------------------------------------
+- Safe now performs active bounded buffered warming of archives successfully opened by Skyrim, including later opens within a 180-second work window. No FILE_FLAG_NO_BUFFERING flag is needed for warming to run.
+- Default limits: 1024 MB/session, 64 MB/archive, 512 archives, 64 MB/s aggregate, one low-priority worker, 15 seconds after DataLoaded. Drive tuning only reduces these caps.
+- Observe only successful existing synchronous read-only BSA/BA2 opens under the game Data directory. Deduplicate paths and reject saves, other modules in IAT mode, failed opens, writes and out-of-root paths.
+- Read through separate shared read-only handles. Check RAM between chunks, pause on SKSE save-load messages, enforce the session deadline, preserve caller GetLastError and atomically publish IAT hooks.
+- Ordinary buffered warm reads omit SEQUENTIAL_SCAN so Windows is not invited to aggressively evict earlier warmed pages. Mapped/strided options and legacy directory scanning remain available.
+- Log completed ReadFile bytes separately from best-effort mapped requests and raw DirectStorage discard diagnostics. Always explain inactivity; active warming no longer triggers the old whole-plugin no-op message.
+- Keep all three installer choices and existing INI keys. Minimal remains the warming-disabled control; Experimental uses larger limits and retains process-wide interception.
+- Add an isolated Windows host exercising the actual DLL, plus production policy checks in CTest/CI. No save schema, game records, scripts or dependencies changed.
+- In-game loading/FPS gains, the supported-runtime matrix and manager installation remain unverified. No deployment or public release in this work.
+- Incorporated current remote main 10b7590 (README layout, community files and dependency-action updates). Failed archive opens now leave successful flag-change counters unchanged. The idle monitor does not repeatedly initialize empty workers.
+
+2.2.1 - 2026-09-29 release preparation (parent: 02a3896 / 2.2.0)
+----------------------------------------------------------------
+- Confirmed default Safe archive warming in a real Skyrim 1.6.1170 / SKSE 2.2.8 session: 903,412,094 completed buffered bytes across 509 archives, zero warm failures, 138 save-load pause checks, 180-second work window. This establishes activity, not a comparative loading/FPS gain.
+- Corrected the completion reason: later empty-batch memory replanning no longer mislabels a completed session as having no RAM headroom. Added a regression to the actual-DLL host.
+- Safe limits, archive eligibility, save/memory guards, installer choices and custom opt-outs are unchanged from the tested 2.2.0 candidate.
+- This is the first public release of the active Safe warming introduced in 2.2.0. Install the full FOMOD and choose Safe when upgrading from a warming-disabled profile.

@@ -70,22 +70,26 @@ PIMAGE_THUNK_DATA FindIatSlot(HMODULE module, const char* funcName,
 	return nullptr;
 }
 
-bool WriteSlot(PIMAGE_THUNK_DATA slot, ULONGLONG value)
+bool WriteSlot(PIMAGE_THUNK_DATA slot, ULONGLONG value, ULONGLONG expected = 0)
 {
 	DWORD oldProtect = 0;
 	if (!VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function),
 			PAGE_READWRITE, &oldProtect))
 		return false;
-	slot->u1.Function = value;
+	void* previous = expected ?
+		InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(&slot->u1.Function),
+			reinterpret_cast<void*>(value), reinterpret_cast<void*>(expected)) :
+		InterlockedExchangePointer(reinterpret_cast<void* volatile*>(&slot->u1.Function),
+			reinterpret_cast<void*>(value));
 	DWORD ignored = 0;
 	VirtualProtect(&slot->u1.Function, sizeof(slot->u1.Function), oldProtect, &ignored);
-	return true;
+	return !expected || previous == reinterpret_cast<void*>(expected);
 }
 
 } // namespace
 
 void* IatHookInstall(HMODULE module, const char* funcName, void* replacement,
-	char* foundInModule, size_t foundInModuleChars)
+	char* foundInModule, size_t foundInModuleChars, void** originalBeforePublish)
 {
 	if (!funcName || !replacement)
 		return nullptr;
@@ -99,7 +103,10 @@ void* IatHookInstall(HMODULE module, const char* funcName, void* replacement,
 	void* previous = reinterpret_cast<void*>(slot->u1.Function);
 	if (previous == replacement)
 		return nullptr; // already installed; do not chain onto ourselves
-	if (!WriteSlot(slot, reinterpret_cast<ULONGLONG>(replacement)))
+	// Publish the call-through pointer before any game thread can enter the hook.
+	if (originalBeforePublish)
+		*originalBeforePublish = previous;
+	if (!WriteSlot(slot, reinterpret_cast<ULONGLONG>(replacement), reinterpret_cast<ULONGLONG>(previous)))
 		return nullptr;
 	return previous;
 }

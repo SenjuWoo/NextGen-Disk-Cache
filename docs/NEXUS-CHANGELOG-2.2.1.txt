@@ -1,0 +1,9 @@
+2.2.1
+
+- Safe now actively warms archives used by Skyrim, even when archive opens already use buffered caching.
+- Background reads have session, per-archive, rate and time limits. Work pauses during save loading or memory pressure.
+- Minimal disables warming for troubleshooting and comparison; Experimental retains its optional wider hooks and archive sampling.
+- Logs now distinguish completed reads from prefetch requests and explain why warming stops.
+- Corrected a misleading completion message after memory conditions changed during an idle period.
+- Default Safe activity confirmed in a real game session: 861 MiB read across 509 archives, with zero warm failures. Loading-time and FPS gains are not measured.
+- When upgrading from an older warming-disabled profile, reinstall the full FOMOD and select Safe. Existing custom opt-outs remain respected.

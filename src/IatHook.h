@@ -21,7 +21,7 @@
 // import is absent, imported by ordinal, or the page could not be made writable.
 // Pass nullptr for `module` to patch the main executable.
 void* IatHookInstall(HMODULE module, const char* funcName, void* replacement,
-	char* foundInModule, size_t foundInModuleChars);
+	char* foundInModule, size_t foundInModuleChars, void** originalBeforePublish = nullptr);
 
 // Restores a previously replaced entry. Safe to call with nullptr original.
 bool IatHookRemove(HMODULE module, const char* funcName, void* original);
