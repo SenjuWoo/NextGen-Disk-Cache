@@ -1,7 +1,6 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
-  <moduleName>NextGen Disk Cache 2.1.0</moduleName>
+<?xml version="1.0" encoding="utf-8"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
+  <moduleName>NextGen Disk Cache 2.2.0</moduleName>
   <requiredInstallFiles>
     <folder source="Core" destination="" priority="0" />
   </requiredInstallFiles>
@@ -11,13 +10,11 @@
         <group name="Safe or Experimental" type="SelectExactlyOne">
           <plugins order="Explicit">
             <plugin name="Safe (Recommended)">
-              <description>The normal-play profile. Hooks only the relevant imports belonging to SkyrimSE.exe. Considers only eligible read-only synchronous .bsa/.ba2 opens, and the single change it makes is removing FILE_FLAG_NO_BUFFERING when the engine set it.
+              <description>Active bounded archive warming. Keeps the narrow SkyrimSE.exe import hook and unchanged save/write/async safety gates. It observes successful read-only BSA/BA2 opens under game Data and warms those archives through separate read-only buffered handles, including archives opened later during the work window.
 
-As of 2.1.0 the FILE_FLAG_RANDOM_ACCESS hint ships OFF. That hint DISABLES the Windows read-ahead that the flag it replaces enlarges, it has never been benchmarked as a win, and on runtime 1.6.1170 it was the only live effect this plugin had. If your runtime never sets FILE_FLAG_NO_BUFFERING, this profile deliberately does nothing at all - and the log says so.
+Limits: 1024 MB per process session, 64 MB per archive, 512 distinct archives, 64 MB/s aggregate, one low-priority worker, 15 seconds after SKSE DataLoaded and a 180-second work window. Drive-only tuning reduces rate to 32 MB/s on SATA SSD, 8 MB/s on HDD and 16 MB/s when detection is inconclusive; HDD budget is reduced to 256 MB. RAM reserve checks run between chunks and save-load messages pause reads.
 
-Saves, cosaves, journals, databases, logs, temp files, plugins, loose meshes/textures/audio, config files and unknown extensions are never touched. Write, create, truncate, overlapped, write-through and delete-on-close handles are never modified.
-
-Warm cache, hardware profiling, automatic tuning, process-wide interception, working-set expansion and power-throttling changes are all disabled. Use this for normal play.</description>
+No random-access hint, process-wide hook, full hardware enumeration, working-set expansion or DirectStorage. Logs report completed reads and explain inactivity. Cache retention and in-game performance depend on Windows and the workload.</description>
               <files>
                 <folder source="Profiles\SafeDefault" destination="SKSE\Plugins" priority="10" />
               </files>
@@ -26,7 +23,7 @@ Warm cache, hardware profiling, automatic tuning, process-wide interception, wor
               </typeDescriptor>
             </plugin>
             <plugin name="Minimal (troubleshooting)">
-              <description>Same narrow executable-only hook and safety gates as Safe. Since 2.1.0 turned the random-access hint off in Safe as well, this profile is behaviourally identical to Safe; it differs only in that the periodic statistics line is not written to the log and all warm-cache budgets are hard-zeroed. Pick it if you want the quietest possible install while investigating a compatibility concern.</description>
+              <description>Warming-disabled control for troubleshooting and comparison. Same narrow executable-only archive flag policy as Safe, with random-access hints and process changes disabled. No background archive reads, hardware probing or automatic tuning. Statistics remain enabled so an inactive flag policy is visible in the log.</description>
               <files>
                 <folder source="Profiles\Minimal" destination="SKSE\Plugins" priority="10" />
               </files>
@@ -35,15 +32,11 @@ Warm cache, hardware profiling, automatic tuning, process-wide interception, wor
               </typeDescriptor>
             </plugin>
             <plugin name="Experimental (unproven - benchmark it)">
-              <description>Includes the archive policy used by Safe, plus features that have NOT been demonstrated to improve Skyrim performance:
+              <description>Larger archive warmer with process-wide Detours interception, the random-access archive hint, hardware profiling and the legacy EcoQoS opt-out. These options change a wider part of the process than Safe.
 
-- FILE_FLAG_RANDOM_ACCESS applied to eligible archives (this is the flag Safe turned off in 2.1.0; it disables Windows read-ahead)
-- Process-wide Detours interception instead of the narrow SkyrimSE.exe import hook
-- Bounded speculative warm cache: 512 MB total, 8 MB per archive, 128 archives max, one low-priority worker, 60-second delay
-- Hardware profiling and automatic warmer reduction (auto-tune may only reduce configured limits)
-- EcoQoS execution-speed throttling disabled for the Skyrim process
+Limits: 2048 MB per process session, 128 MB per archive, 512 observed archives, 128 MB/s aggregate, one worker, 30 seconds after DataLoaded, a 180-second work window and strided sampling. Drive and RAM checks can only reduce these limits. Save-load messages pause warming. DirectStorage stays disabled.
 
-DirectStorage remains disabled. Benchmark against Safe on the same save and route. If you cannot measure a repeatable improvement, use Safe.</description>
+Compare loading and traversal against Safe and Minimal using the same save and route. This profile has no measured gameplay advantage.</description>
               <files>
                 <folder source="Profiles\ExperimentalWarmCache" destination="SKSE\Plugins" priority="10" />
               </files>

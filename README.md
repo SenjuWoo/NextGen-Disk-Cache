@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="docs/images/logo.svg" width="72" height="72" alt="NextGen Disk Cache mark">
+  <img src="https://raw.githubusercontent.com/SenjuWoo/NextGen-Disk-Cache/main/docs/images/logo.svg" width="72" height="72" alt="NextGen Disk Cache mark">
 </p>
 
 <h1 align="center">NextGen Disk Cache</h1>
 
-<p align="center"><strong>Let Windows cache eligible Skyrim archives. Safe is the default.</strong></p>
+<p align="center"><strong>Active archive warming with bounded background I/O. Safe is the default.</strong></p>
 
 <p align="center">
-  Conservative SKSE64 derivative of Disk Cache Enabler (Archost / enpinion, ISC).<br>
-  Only eligible read-only BSA/BA2 opens. Performance gains are not guaranteed.
+  Configurable SKSE64 derivative of Disk Cache Enabler (Archost / enpinion, ISC).<br>
+  Version 2.2.0 candidate: read-only archive warming, paced I/O and memory safeguards.
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@
 
 When Skyrim opens an eligible **`.bsa` or `.ba2`** with `FILE_FLAG_NO_BUFFERING`, Windows cannot use its normal file cache. This plugin can strip that flag on a narrow set of read-only archive opens.
 
-That is the job. It does not rewrite saves, plugins, or loose assets.
+The 2.1.0 Safe profile could be inert when the engine already used buffered opens. Version 2.2.0 adds active archive warming that does not depend on that flag. It uses separate read-only handles to populate the Windows file cache for archives the game actually opens.
 
 ## What it actually does
 
@@ -48,7 +48,7 @@ An archive open is eligible only when it is all of:
 
 The recommended **Safe** profile hooks only the relevant imports on **SkyrimSE.exe**. File operations from unrelated SKSE DLLs do not pass through that hook.
 
-If your runtime never sets `FILE_FLAG_NO_BUFFERING`, Safe correctly does nothing, and the log says so.
+The flag policy and warmer are independent: `patched=0` can accompany positive `warm_read_bytes`. Safe observes successful eligible opens under the game Data directory, deduplicates them, then warms bounded portions of those archives after SKSE DataLoaded. It keeps accepting later opens until the session budget or deadline is reached. Opening an archive proves archive use, not which internal asset ranges the save will need.
 
 ## What it does not modify
 
@@ -70,23 +70,21 @@ The plugin does not parse, edit, or store information inside your save files.
 
 The FOMOD contains three mutually exclusive profiles.
 
-| Profile | Hook | `FILE_FLAG_NO_BUFFERING` | `FILE_FLAG_RANDOM_ACCESS` | Everything else |
+| Profile | Hook | Warmer | Session / per archive | Rate ceiling / delay |
 | --- | --- | --- | --- | --- |
-| **Safe** (recommended) | SkyrimSE.exe import table | Strip if present | **Off** since 2.1.0 | Off |
-| **Minimal** | Same as Safe | Same as Safe | Off | Quiet log; warm-cache budgets hard-zeroed |
-| **Experimental** | Process-wide Detours | Strip if present | On (for A/B) | Warmer, profiling, EcoQoS off — **unproven** |
+| **Safe** (recommended) | SkyrimSE.exe imports | Observed archives, buffered reads | 1024 / 64 MB | 64 MB/s / 15 s |
+| **Minimal** | Same as Safe | Disabled; comparison control | 0 | No warm I/O |
+| **Experimental** | Process-wide Detours | Observed archives, strided reads | 2048 / 128 MB | 128 MB/s / 30 s |
 
-**Why random-access is off in Safe.** `FILE_FLAG_RANDOM_ACCESS` disables cache-manager read-ahead; the `FILE_FLAG_SEQUENTIAL_SCAN` hint it displaces enlarges it. A real 1.6.1170 session logged `opens=26162 patched=6481 no_buffering_stripped=0` — the engine never set `FILE_FLAG_NO_BUFFERING`, so the hint was the only live effect, applied thousands of times per minute, with no benchmark behind it. Set `bPreferRandomAccessOnArchives=1` yourself if you can measure a repeatable win, or install Experimental.
+Both warmers use one low-priority worker, at most 512 distinct archives and a 180-second work window after the delay. The budget is **per process session**, not renewed per load. Small files return unused reservations; archives in a batch share the remaining budget so the first few filenames do not monopolize it.
 
-Experimental also enables:
+Drive-only tuning in Safe performs no CPU/SMBIOS/GPU enumeration. It only reduces the configured caps: SATA SSD rate <=32 MB/s; HDD rate <=8 MB/s and budget <=256 MB; unknown drive rate <=16 MB/s. A configured RAM reserve, 90% memory-load ceiling and successful memory query are checked before each 1 MB buffered read (4 MB mapped request). Save-load messages pause work. A request already executing cannot be cancelled synchronously; slow-device I/O may finish after the deadline. Windows controls eviction and residency.
 
-- Bounded speculative warm cache (512 MB total, 8 MB per archive, 128 archives, one low-priority thread, 60 s delay)
-- Hardware profiling and automatic warmer **reduction** (it does not scale beyond those caps)
-- EcoQoS execution-speed throttling disabled for the Skyrim process
+Safe leaves random-access hints, process-wide interception, working-set and power-throttling changes off. Experimental retains its wider hook, random-access hint, hardware profiler and EcoQoS opt-out. These are configurable options without a measured gameplay advantage.
 
-The warmer cannot know which archives the current save will need. **Benchmark Experimental against Safe on the same save, route, and conditions. If you cannot measure a repeatable improvement, use Safe.**
+`bWarmCacheOnlyObservedArchives=0` explicitly selects the legacy Data-directory scan; the default never scans inactive archives. `bWarmCacheMappedPrefetch=1` uses best-effort mapped requests, reported separately from completed buffered bytes. `bWarmCacheStridedPrefetch=1` samples windows across large archives with either backend. Existing INI keys remain supported.
 
-Since 2.1.0, Minimal is behaviourally identical to Safe except for logging and hard-zeroed warmer budgets.
+The warmer does not know exact internal asset ranges. Compare Safe and Minimal on the same save, route and cache conditions to measure any loading or traversal benefit.
 
 ## DirectStorage status
 
@@ -99,7 +97,7 @@ The plugin still contains an optional, dynamically resolved DirectStorage backen
 - 64-bit Windows
 - Skyrim Special Edition or Anniversary Edition with SKSE64
 
-DLL metadata lists runtimes **1.5.97**, **1.6.640**, and **GOG 1.6.659**. Other versions are not claimed as tested. No complete runtime compatibility matrix has been published.
+DLL metadata lists **1.5.97**, **1.6.640**, **GOG 1.6.659** and **1.6.1170**. The implementation uses Windows APIs and the SKSE messaging interface without game-code offsets or Address Library. The isolated host uses a 1.6.1170-shaped SKSE interface; a full in-game runtime compatibility matrix remains open.
 
 Do not install together with original Disk Cache Enabler, another NextGen Disk Cache, or a duplicate `NextGenDiskCache.dll`.
 
@@ -108,13 +106,17 @@ Do not install together with original Disk Cache Enabler, another NextGen Disk C
 Install with Vortex or Mod Organizer 2 from [Releases](https://github.com/ShugokiFable/NextGen-Disk-Cache/releases) or [Nexus](https://www.nexusmods.com/skyrimspecialedition/mods/185563).
 
 1. Choose **Safe** for normal play.
-2. Choose **Minimal** only for troubleshooting or a quiet install.
+2. Choose **Minimal** for troubleshooting or a warming-disabled comparison.
 3. Choose **Experimental** only when you intend to benchmark it.
 
 The installer places `NextGenDiskCache.dll` and the selected `NextGenDiskCache.ini` in `Data\SKSE\Plugins`. Launch through SKSE64.
 
+Upgrade with the full 2.2.0 package and select Safe. Replacing only the DLL while retaining a 2.1.0 Safe INI preserves its `bEnableWarmCache=0` opt-out. Custom opt-outs are respected.
+
 Log (Steam): `Documents\My Games\Skyrim Special Edition\SKSE\NextGenDiskCache.log`  
 Log (GOG): `Documents\My Games\Skyrim Special Edition GOG\SKSE\NextGenDiskCache.log`
+
+`bLogToPluginDirectory=1` optionally writes the log beside the DLL (requires a writable directory); the default uses Documents. Log lines distinguish `warm_read_bytes`, `prefetch_requested_bytes` and `raw_discarded_bytes`. Prefetch acceptance is not proof of cache residency.
 
 For temporary diagnostics, `bLogEveryOpen=1` — then set it back to `0`. When reporting an issue, include the complete log, profile, Skyrim executable version, SKSE version, storage type, and whether it happens without this plugin.
 
@@ -124,10 +126,11 @@ Only one DLL/INI copy. Changing profiles: reinstall the FOMOD; do not merge INIs
 
 ```powershell
 .\build.ps1            # Release x64 (may fetch DirectStorage SDK headers for compile only)
-.\package-release.ps1  # public FOMOD zip + SHA-256 (no DirectStorage runtime)
+.\package-release.ps1  # candidate FOMOD zip + SHA-256 (no DirectStorage runtime)
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-The 2.1.0 plugin DLL in the public package is the GitHub Actions build from tag `v2.1.0`. Later compliance revisions update FOMOD docs, licensing, and package metadata only. The PDB is not inside the FOMOD zip.
+The latest published release remains 2.1.0; this source is a **2.2.0 candidate**. CI builds the exact candidate SHA and runs the policy check plus an isolated Windows host against the actual DLL before packaging. The PDB and test executables stay outside the FOMOD ZIP.
 
 ```text
 dumpbin /exports NextGenDiskCache.dll   →  only SKSEPlugin_Load/Query/Version
@@ -139,24 +142,26 @@ MSVC output is not bit-identical across compiler versions. Local builds may diff
 ## Project map
 
 ```text
-src/                 SKSE plugin (IAT hook, DirectStorage backend stub)
+src/                 SKSE plugin (IAT hook, archive warmer, optional DirectStorage backend)
 profiles/            Safe / Minimal / Experimental INI
 package/             staged SKSE/Plugins
 fomod/               installer
 deps/                Detours + DirectStorage SDK headers (compile)
 tools/               package / validation helpers
+tests/               production policy checks + isolated actual-DLL Windows host
 LICENSE.txt          ISC (Archost Disk Cache Enabler derivative)
 ```
 
 ## Honest status
 
-This mod changes file-open caching policy. It does not guarantee higher FPS, faster loading screens, less traversal stutter, or lower memory use.
+This mod changes eligible archive-open flags and performs bounded background archive reads. It does not guarantee higher FPS, faster loading screens, less traversal stutter, or lower memory use.
 
 Verified in this tree:
 
-- Version **2.1.0**
+- Version **2.2.0 candidate**
 - Safe / Minimal / Experimental profiles as documented
-- Runtime file-policy self-test and source/package validation (policy invariants, not an in-game benchmark)
+- Runtime file-policy self-test and source/package validation
+- Actual-DLL host checks: positive buffered reads with zero flag changes, later opens, scoped observation, Unicode paths, aggregate pacing, failed memory queries, RAM pressure, save-load pauses and separate mapped-request counters
 - DirectStorage backend compiled but disabled in every shipped profile
 
 Not claimed:
@@ -164,7 +169,7 @@ Not claimed:
 - A public comparative in-game performance benchmark
 - A complete Skyrim runtime compatibility matrix
 - Universal compatibility with specific mod lists or SKSE plugins
-- That Safe does anything on a runtime that never sets `FILE_FLAG_NO_BUFFERING`
+- A guaranteed improvement from warming bytes that Windows may already have cached
 
 AI tools assisted portions of development, auditing, and documentation. That does not replace verification. Behaviour here is limited to the published source, shipped INIs, and current testing record.
 

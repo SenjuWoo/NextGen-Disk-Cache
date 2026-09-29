@@ -1,4 +1,15 @@
-# NextGen Disk Cache 1.4.0 safety rework
+# NextGen Disk Cache 2.2.0 active cache rework
+
+Native parent: 4755359 / 2.1.0. Current remote documentation/CI/community baseline: 10b7590. Historical 1.4.0 notes follow below and describe that release, not the 2.2.0 default.
+
+- Safe enables paced, bounded buffered reads of successfully opened game archives, with a narrow IAT hook and separate read-only handles.
+- Minimal is the warming-disabled comparison; all three installer choices and every existing INI key remain present.
+- Memory checks run between chunks; the session budget and deadline bound work. DataLoaded defers startup and save-load messages pause it.
+- Completed reads, accepted mapped requests and raw DirectStorage discard diagnostics have distinct counters. Failed opens do not count as successful flag changes.
+- IAT publication preserves existing call-through pointers before atomic replacement. Experimental Detours enlists live threads before code changes and refuses attachment on errors.
+- Tests exercise the production policy and actual DLL in isolated fixtures. No runtime deployment or public release is performed.
+
+## Historical 1.4.0 safety rework
 
 Base: `af0ab6172ae6f19c5f8511d46cd55163948c272a` (1.3.1).
 

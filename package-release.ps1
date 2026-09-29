@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "2.1.0",
+    [string]$Version = "2.2.0",
     [switch]$SkipBuild
 )
 
@@ -20,8 +20,17 @@ $stage = Join-Path $distRoot "NextGenDiskCache-$Version"
 $zip = Join-Path $distRoot "NextGenDiskCache-$Version-FOMOD.zip"
 $shaFile = Join-Path $distRoot "NextGenDiskCache-$Version-SHA256.txt"
 
-Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item $zip -Force -ErrorAction SilentlyContinue
+# Verify every computed deletion target stays within this checkout's dist tree.
+$distPrefix = [System.IO.Path]::GetFullPath($distRoot) + [System.IO.Path]::DirectorySeparatorChar
+foreach ($target in @($stage, $zip)) {
+    if (-not [System.IO.Path]::GetFullPath($target).StartsWith($distPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Package output escapes dist: $target"
+    }
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must be major.minor.patch" }
+
+if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 New-Item (Join-Path $stage "Core\SKSE\Plugins") -ItemType Directory -Force | Out-Null
 New-Item (Join-Path $stage "Profiles\SafeDefault") -ItemType Directory -Force | Out-Null
 New-Item (Join-Path $stage "Profiles\Minimal") -ItemType Directory -Force | Out-Null
@@ -92,6 +101,14 @@ if ($coreDlls.Count -ne 1 -or $coreDlls[0].Name -ne "NextGenDiskCache.dll") {
 }
 
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -CompressionLevel Optimal
+if ($env:NGDC_PYTHON) {
+    & $env:NGDC_PYTHON (Join-Path $root "tools\validate_rc.py") --archive $zip
+} else {
+    $python = Get-Command python,python3,py -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $python) { throw "Python 3 is required for archive validation; set NGDC_PYTHON to its executable." }
+    & $python.Source (Join-Path $root "tools\validate_rc.py") --archive $zip
+}
+if ($LASTEXITCODE) { throw "Final archive validation failed" }
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 "$hash  $(Split-Path $zip -Leaf)" | Set-Content $shaFile -Encoding ASCII
 
