@@ -39,17 +39,17 @@ jobs:
         shell: pwsh
         run: .\package-release.ps1 -SkipBuild
 
-      - name: Upload candidate FOMOD artifact
+      - name: Upload FOMOD artifact
         uses: actions/upload-artifact@v7
         with:
-          name: NextGenDiskCache-2.2.0-FOMOD
+          name: NextGenDiskCache-2.2.1-FOMOD
           path: |
-            dist/NextGenDiskCache-2.2.0-FOMOD.zip
-            dist/NextGenDiskCache-2.2.0-SHA256.txt
+            dist/NextGenDiskCache-2.2.1-FOMOD.zip
+            dist/NextGenDiskCache-2.2.1-SHA256.txt
 
       - name: Upload symbols separately
         uses: actions/upload-artifact@v7
         with:
-          name: NextGenDiskCache-2.2.0-symbols
+          name: NextGenDiskCache-2.2.1-symbols
           path: build/symbols/NextGenDiskCache.pdb
           if-no-files-found: warn

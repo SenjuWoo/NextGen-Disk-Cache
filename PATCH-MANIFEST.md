@@ -1,4 +1,12 @@
-# NextGen Disk Cache 2.2.0 active cache rework
+# NextGen Disk Cache 2.2.1 runtime-evidence and diagnostic patch
+
+Parent: 02a3896169f3b5acd26ce020ae29eac21ddcc973 / 2.2.0. The user installed the default Safe FOMOD and supplied a real game session: 903,412,094 completed buffered bytes across 509 archives, zero warm failures, 138 save-load pause checks and a 180-second work window. Performance gain was not measured.
+
+- Keep the initial session budget for completion diagnostics; do not use a later empty batch's recalculated RAM budget as the exit reason.
+- Extend the existing actual-DLL observed-mode regression: after its reads finish, reduce available RAM and require the deadline completion reason.
+- Keep all warming settings, eligibility and safety behavior unchanged. Refresh release/version metadata, runtime evidence and user changelog.
+
+## Historical 2.2.0 active cache rework
 
 Native parent: 4755359 / 2.1.0. Current remote documentation/CI/community baseline: 10b7590. Historical 1.4.0 notes follow below and describe that release, not the 2.2.0 default.
 

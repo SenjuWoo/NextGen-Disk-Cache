@@ -233,11 +233,16 @@ int wmain(int argc, wchar_t** argv) try
 	const fs::path logPath = plugins / "NextGenDiskCache.log";
 	std::string log;
 	while (GetTickCount64() - start < 10000) {
+		// Match the real session: RAM can change after the archive batch is done.
+		// An empty replanned batch must not rewrite the session's exit reason.
+		if (mode == L"observed" && bytesRead.load() >= (4ull << 20)) pressure.store(true);
 		log = Text(logPath);
 		if (log.find("WarmCache: finished;") != std::string::npos) break;
 		Sleep(50);
 	}
 	require(log.find("WarmCache: finished;") != std::string::npos, "warmer missed deadline/completion");
+	if (mode == L"observed") require(log.find("reason=session deadline") != std::string::npos,
+		"idle RAM changes replaced the real completion reason");
 	require(log.find("patched=0 no_buffering_stripped=0") != std::string::npos,
 		"failed archive opens were counted as successful caching changes");
 	const uint64_t expected = mode == L"strided" ? 16ull << 20 : mode == L"late" || mode == L"wide" ? 6ull << 20 : 4ull << 20;

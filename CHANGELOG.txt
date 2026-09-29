@@ -414,3 +414,10 @@ Notes:
 - Add an isolated Windows host exercising the actual DLL, plus production policy checks in CTest/CI. No save schema, game records, scripts or dependencies changed.
 - In-game loading/FPS gains, the supported-runtime matrix and manager installation remain unverified. No deployment or public release in this work.
 - Incorporated current remote main 10b7590 (README layout, community files and dependency-action updates). Failed archive opens now leave successful flag-change counters unchanged. The idle monitor does not repeatedly initialize empty workers.
+
+2.2.1 - 2026-09-29 release preparation (parent: 02a3896 / 2.2.0)
+----------------------------------------------------------------
+- Confirmed default Safe archive warming in a real Skyrim 1.6.1170 / SKSE 2.2.8 session: 903,412,094 completed buffered bytes across 509 archives, zero warm failures, 138 save-load pause checks, 180-second work window. This establishes activity, not a comparative loading/FPS gain.
+- Corrected the completion reason: later empty-batch memory replanning no longer mislabels a completed session as having no RAM headroom. Added a regression to the actual-DLL host.
+- Safe limits, archive eligibility, save/memory guards, installer choices and custom opt-outs are unchanged from the tested 2.2.0 candidate.
+- This is the first public release of the active Safe warming introduced in 2.2.0. Install the full FOMOD and choose Safe when upgrading from a warming-disabled profile.

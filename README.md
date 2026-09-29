@@ -8,13 +8,13 @@
 
 <p align="center">
   Configurable SKSE64 derivative of Disk Cache Enabler (Archost / enpinion, ISC).<br>
-  Version 2.2.0 candidate: read-only archive warming, paced I/O and memory safeguards.
+  Version 2.2.1: read-only archive warming, paced I/O and memory safeguards.
 </p>
 
 <p align="center">
   <a href="https://github.com/ShugokiFable/NextGen-Disk-Cache/actions/workflows/build-release.yml"><img src="https://github.com/ShugokiFable/NextGen-Disk-Cache/actions/workflows/build-release.yml/badge.svg" alt="Build"></a>
   <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-ISC-e8b86d?labelColor=0d0f11" alt="ISC License"></a>
-  <a href="https://github.com/ShugokiFable/NextGen-Disk-Cache/releases/tag/v2.1.0"><img src="https://img.shields.io/badge/release-v2.1.0-e8b86d?labelColor=0d0f11" alt="v2.1.0"></a>
+  <a href="https://github.com/ShugokiFable/NextGen-Disk-Cache/releases/tag/v2.2.1"><img src="https://img.shields.io/badge/release-v2.2.1-e8b86d?labelColor=0d0f11" alt="v2.2.1"></a>
   <img src="https://img.shields.io/badge/SKSE-SE%20%2F%20AE-8f9aa6?labelColor=0d0f11" alt="SKSE SE/AE">
 </p>
 
@@ -111,7 +111,7 @@ Install with Vortex or Mod Organizer 2 from [Releases](https://github.com/Shugok
 
 The installer places `NextGenDiskCache.dll` and the selected `NextGenDiskCache.ini` in `Data\SKSE\Plugins`. Launch through SKSE64.
 
-Upgrade with the full 2.2.0 package and select Safe. Replacing only the DLL while retaining a 2.1.0 Safe INI preserves its `bEnableWarmCache=0` opt-out. Custom opt-outs are respected.
+Upgrade with the full 2.2.1 package and select Safe. Replacing only the DLL while retaining a 2.1.0 Safe INI preserves its `bEnableWarmCache=0` opt-out. Custom opt-outs are respected.
 
 Log (Steam): `Documents\My Games\Skyrim Special Edition\SKSE\NextGenDiskCache.log`  
 Log (GOG): `Documents\My Games\Skyrim Special Edition GOG\SKSE\NextGenDiskCache.log`
@@ -126,11 +126,11 @@ Only one DLL/INI copy. Changing profiles: reinstall the FOMOD; do not merge INIs
 
 ```powershell
 .\build.ps1            # Release x64 (may fetch DirectStorage SDK headers for compile only)
-.\package-release.ps1  # candidate FOMOD zip + SHA-256 (no DirectStorage runtime)
+.\package-release.ps1  # FOMOD zip + SHA-256 (no DirectStorage runtime)
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The latest published release remains 2.1.0; this source is a **2.2.0 candidate**. CI builds the exact candidate SHA and runs the policy check plus an isolated Windows host against the actual DLL before packaging. The PDB and test executables stay outside the FOMOD ZIP.
+CI builds the exact release SHA and runs the policy check plus an isolated Windows host against the actual DLL before packaging. The PDB and test executables stay outside the FOMOD ZIP.
 
 ```text
 dumpbin /exports NextGenDiskCache.dll   →  only SKSEPlugin_Load/Query/Version
@@ -158,8 +158,9 @@ This mod changes eligible archive-open flags and performs bounded background arc
 
 Verified in this tree:
 
-- Version **2.2.0 candidate**
+- Version **2.2.1**
 - Safe / Minimal / Experimental profiles as documented
+- Real Skyrim 1.6.1170 / SKSE 2.2.8 log: the 2.2.0 Safe build completed 903,412,094 buffered bytes across 509 archives with zero warm failures and save-load pauses. Version 2.2.1 preserves that warming behavior and corrects its completion-reason message.
 - Runtime file-policy self-test and source/package validation
 - Actual-DLL host checks: positive buffered reads with zero flag changes, later opens, scoped observation, Unicode paths, aggregate pacing, failed memory queries, RAM pressure, save-load pauses and separate mapped-request counters
 - DirectStorage backend compiled but disabled in every shipped profile

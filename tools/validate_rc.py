@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 PROFILES = ["SafeDefault", "Minimal", "ExperimentalWarmCache"]
 PUBLIC_DOCS = ["README.md", "CHANGELOG.txt", "PACKAGE-NOTICE.txt", "LICENSE.txt",
                "LICENSE.Archost-DiskCacheEnabler.txt", "LICENSE.detours.txt",

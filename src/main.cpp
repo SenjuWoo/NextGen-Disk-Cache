@@ -85,8 +85,8 @@
 // Nexus uploads (1.1.2 / 1.1.3) used a separate numbering scheme from the git
 // tags (1.3.0 / 1.4.x), which made user bug reports impossible to map onto a
 // commit. From here the DLL, the tag, and the Nexus file all read the same.
-#define PLUGIN_VERSION ((2u << 16) | (2u << 8) | 0u) // 2.2.0
-#define PLUGIN_VERSION_STRING "2.2.0"
+#define PLUGIN_VERSION ((2u << 16) | (2u << 8) | 1u) // 2.2.1
+#define PLUGIN_VERSION_STRING "2.2.1"
 
 // ---------------------------------------------------------------------------
 // Settings (INI)
@@ -1974,7 +1974,8 @@ static void WarmCacheCoordinator()
 
 	static WarmPlan plan;
 	BuildWarmPlan(plan);
-	g_warmBudgetLeft.store((int64_t)plan.budgetBytes);
+	const uint64_t sessionBudgetBytes = plan.budgetBytes;
+	g_warmBudgetLeft.store((int64_t)sessionBudgetBytes);
 	const ULONGLONG t0 = GetTickCount64();
 	g_warmDeadline.store(t0 + static_cast<ULONGLONG>(g_settings.warmCacheDurationSecs) * 1000);
 	Log("WarmCache: active; %s, capped at %llu bytes for this session, deadline %u s",
@@ -2013,8 +2014,9 @@ static void WarmCacheCoordinator()
 		g_warmFilesTouched.load(),
 		(unsigned long long)elapsed,
 		plan.threads, plan.threads == 1 ? "" : "s",
-		!plan.budgetBytes ? "no RAM headroom or disabled file limit" :
-		g_warmBudgetLeft.load() <= 0 ? "session budget used" : "session deadline/shutdown");
+		!sessionBudgetBytes ? "no initial RAM headroom or disabled file limit" :
+		g_shutdown.load() ? "shutdown" :
+		g_warmBudgetLeft.load() <= 0 ? "session budget used" : "session deadline");
 	LogStatsSnapshot();
 }
 

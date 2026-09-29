@@ -1,4 +1,4 @@
-NextGen Disk Cache 2.0.0 - Public Package Notice
+NextGen Disk Cache - Public Package Notice
 ================================================
 
 This package does not include the Microsoft DirectStorage runtime DLLs.
