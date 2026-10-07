@@ -2,7 +2,7 @@
 
 | | |
 |--|--|
-| **Repo** | https://github.com/ShugokiFable/NextGen-Disk-Cache |
+| **Repo** | https://github.com/SenjuWoo/NextGen-Disk-Cache |
 | **This folder** | git root (``origin`` should already point here) |
 | **Parent package** | ``..\`` version folders for ship zips |
 
