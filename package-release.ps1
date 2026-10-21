@@ -82,7 +82,21 @@ if ($coreDlls.Count -ne 1 -or $coreDlls[0].Name -ne "NextGenDiskCache.dll") {
     throw "Core payload must contain exactly NextGenDiskCache.dll"
 }
 
-Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -CompressionLevel Optimal
+# Explicit entries: Windows PowerShell 5.1's Compress-Archive writes backslash
+# separators, which the zip format does not allow. Sorted for a stable layout.
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$zipStream = [System.IO.File]::Open($zip, [System.IO.FileMode]::CreateNew)
+try {
+    $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        $stageFull = [System.IO.Path]::GetFullPath($stage)
+        Get-ChildItem $stageFull -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $name = $_.FullName.Substring($stageFull.Length + 1).Replace('\', '/')
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $archive, $_.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+    } finally { $archive.Dispose() }
+} finally { $zipStream.Dispose() }
 if ($env:NGDC_PYTHON) {
     & $env:NGDC_PYTHON (Join-Path $root "tools\validate_rc.py") --archive $zip
 } else {

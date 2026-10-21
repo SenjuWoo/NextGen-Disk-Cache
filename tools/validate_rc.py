@@ -36,7 +36,9 @@ def validate_archive(path: pathlib.Path) -> None:
                                 "fomod/info.xml", "fomod/ModuleConfig.xml"] +
                    [f"Profiles/{p}/NextGenDiskCache.ini" for p in PROFILES])
     with zipfile.ZipFile(path) as archive:
-        members = [i.filename.replace("\\", "/") for i in archive.infolist() if not i.is_dir()]
+        require(all("\\" not in i.filename for i in archive.infolist()),
+                "archive uses backslash path separators (not valid in zip)")
+        members = [i.filename for i in archive.infolist() if not i.is_dir()]
         require(len(members) == len(set(members)), "duplicate archive members")
         require(set(members) == expected,
                 f"archive member mismatch: extra={set(members) - expected}, missing={expected - set(members)}")
