@@ -12,11 +12,11 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 PROFILES = ["SafeDefault", "Minimal", "ExperimentalWarmCache"]
 PUBLIC_DOCS = ["README.md", "CHANGELOG.txt", "PACKAGE-NOTICE.txt", "LICENSE.txt",
                "LICENSE.Archost-DiskCacheEnabler.txt", "LICENSE.detours.txt",
-               "LICENSE.DirectStorage-Code.txt", "LICENSE.SKSE64.txt"]
+               "LICENSE.SKSE64.txt"]
 
 
 def require(condition: bool, message: str) -> None:
@@ -87,8 +87,8 @@ def main() -> int:
             "VERSION.txt mismatch")
     required = [
         "src/main.cpp",
-        "src/DirectStorageBackend.h",
-        "src/DirectStorageBackend.cpp",
+        "src/HotSet.h",
+        "src/HotSet.cpp",
         "src/IatHook.h",
         "src/IatHook.cpp",
         "CMakeLists.txt",
@@ -103,7 +103,6 @@ def main() -> int:
         "LICENSE.txt",
         "LICENSE.Archost-DiskCacheEnabler.txt",
         "LICENSE.detours.txt",
-        "LICENSE.DirectStorage-Code.txt",
         "LICENSE.SKSE64.txt",
     ] + [f"profiles/{p}/NextGenDiskCache.ini" for p in PROFILES]
     for rel in required:
@@ -132,17 +131,13 @@ def main() -> int:
     require(module.findtext("moduleName") == f"NextGen Disk Cache {VERSION}",
             "wrong FOMOD module version")
     groups = module.findall(".//group")
-    require(len(groups) == 1, "FOMOD should contain only the profile group (no DirectStorage step)")
+    require(len(groups) == 1, "FOMOD should contain only the profile group")
     require(all(g.attrib.get("type") == "SelectExactlyOne" for g in groups),
             "FOMOD choices must be exclusive")
     module_text = (ROOT / "fomod/ModuleConfig.xml").read_text(encoding="utf-8")
-    require("Optional\\DirectStorage" not in module_text and
-            "Optional/DirectStorage" not in module_text,
-            "FOMOD must not install Optional DirectStorage runtime")
-    require("Bundle Microsoft DirectStorage" not in module_text,
-            "FOMOD must not offer a DirectStorage install step")
+    require("DirectStorage" not in module_text, "FOMOD must not offer DirectStorage")
 
-    sections = ["FileCache", "Process", "Hardware", "WarmCache", "DirectStorage", "Log"]
+    sections = ["FileCache", "Process", "Hardware", "HotSet", "WarmCache", "Log"]
     for profile in PROFILES:
         cfg = read_cfg(profile)
         for section in sections:
@@ -159,10 +154,9 @@ def main() -> int:
                 f"{profile}: iHookScope must be {expected_scope}")
         require(cfg.get("Process", "bExpandWorkingSet") == "0",
                 f"{profile}: working-set expansion must ship off")
-        require(cfg.get("DirectStorage", "bDirectStorageProbe") == "0",
-                f"{profile}: DirectStorage probing must ship off")
-        require(cfg.get("DirectStorage", "bDirectStorageWarmRead") == "0",
-                f"{profile}: DirectStorage raw reads must ship off")
+        require(not cfg.has_section("DirectStorage"), f"{profile}: DirectStorage was removed in 2.3.0")
+        require(cfg.get("HotSet", "bHotSetLowIoPriority") in {"0", "1"},
+                f"{profile}: HotSet I/O priority must be explicitly set")
         require(cfg.get("Log", "bLogStatsOnExit") == "0",
                 f"{profile}: exit logging must ship off")
         require(cfg.get("Hardware", "iGameDriveClass") == "0",
@@ -171,10 +165,18 @@ def main() -> int:
     safe = read_cfg("SafeDefault")
     minimal = read_cfg("Minimal")
     experimental = read_cfg("ExperimentalWarmCache")
-    require(safe.get("WarmCache", "bEnableWarmCache") == "1",
-            "safe default must perform active warming")
+    # 2.3.0: the learned load cache replaces the legacy warmer in Safe.
+    for cfg, name in [(safe, "Safe"), (experimental, "Experimental")]:
+        require(cfg.get("HotSet", "bHotSetRecord") == "1" and cfg.get("HotSet", "bHotSetPrefetch") == "1",
+                f"{name}: learned load cache must record and prefetch")
+        require(cfg.getint("HotSet", "iHotSetMaxSecs") <= 300,
+                f"{name}: prefetch must have a short deadline")
+    require(safe.getint("HotSet", "iHotSetBudgetMB") == 0, "Safe: prefetch size must be automatic")
+    require(safe.get("WarmCache", "bEnableWarmCache") == "0",
+            "safe default must not run the legacy warmer alongside the load cache")
+    require(minimal.get("HotSet", "bHotSetRecord") == "0" and minimal.get("HotSet", "bHotSetPrefetch") == "0",
+            "minimal must be the everything-off control")
     for cfg, name, budget, per_file, rate, delay in [
-        (safe, "Safe", 1024, 64, 64, 15),
         (experimental, "Experimental", 2048, 128, 128, 30),
     ]:
         require(cfg.get("WarmCache", "bWarmCacheOnlyObservedArchives") == "1",
@@ -210,6 +212,13 @@ def main() -> int:
     main_cpp = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
     for token in [
         f'PLUGIN_VERSION_STRING "{VERSION}"',
+        # Load-cache recording observes the executable only and never writes a
+        # file position (SetFilePointerEx would race a game thread's own seek).
+        "IsRecordableOpen(flags, desiredAccess, creationDisposition)",
+        "kFilePositionInformation",
+        'IatHookInstall(nullptr, "ReadFile"',
+        "config.open = CreateFileW_orig",
+        "HotSetRecordOpen(result,",
         # 1.4.0 shipped a self-test the optimizer folded to `true`; the failure
         # branch was absent from the binary. These pin the 1.4.1 fix: volatile
         # inputs and a check against the live settings keep it unfoldable.
@@ -228,7 +237,7 @@ def main() -> int:
         "SanitizeSettings()",
         "ParseUnsigned(val, g_settings.warmCacheBudgetMB)",
         "ParseBool(val, g_settings.enableWarmCache)",
-        "ParseBool(val, g_settings.directStorageProbe)",
+        "ParseBool(val, g_settings.hotSetPrefetch)",
         "ObserveArchive(lpFilename)",
         "WarmIoAllowed(readBytes)",
         "g_warmReadBytes.fetch_add(rd",
@@ -244,10 +253,16 @@ def main() -> int:
     require(main_cpp.index("if (!eligibleKind)") < main_cpp.index("out &= ~FILE_FLAG_NO_BUFFERING"),
             "NO_BUFFERING strip occurs before eligibility gate")
 
-    ds_cpp = (ROOT / "src/DirectStorageBackend.cpp").read_text(encoding="utf-8")
-    for token in ["LoadLibraryExW", "DStorageGetFactory", "CancelRequestsWithTag",
-                  "Cancellation is asynchronous", "LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR"]:
-        require(token in ds_cpp, f"DirectStorage backend missing {token}")
+    read_hook = main_cpp.split("static BOOL WINAPI ReadFile_hook")[1].split("static BOOL WINAPI ReadFileEx_hook")[0]
+    require("SetFilePointer" not in read_hook, "ReadFile hook must not move the caller's file position")
+    hot_cpp = (ROOT / "src/HotSet.cpp").read_text(encoding="utf-8")
+    for token in ["HotSetSafeRelativePath", "MB_ERR_INVALID_CHARS", "MOVEFILE_REPLACE_EXISTING",
+                  "kMaxProfileBytes", "size != e.size || mtime != e.mtime", "GENERIC_READ,",
+                  "FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE", "memoryHeadroom"]:
+        require(token in hot_cpp, f"HotSet missing safety token: {token}")
+    prefetch = hot_cpp.split("// --- prefetch")[-1]
+    for token in ["GENERIC_WRITE", "WriteFile", "CREATE_ALWAYS", "DeleteFile"]:
+        require(token not in prefetch, f"prefetch must stay read-only: {token}")
 
     # The narrow IAT hook is the default scope; a process-wide trampoline must
     # stay opt-in and must never be the fallback when the IAT hook fails.
@@ -266,7 +281,8 @@ def main() -> int:
 
     cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     require(f"VERSION {VERSION}" in cmake, "CMake version mismatch")
-    require("DirectStorageBackend.cpp" in cmake, "DirectStorage backend not built")
+    require("HotSet.cpp" in cmake and "directstorage" not in cmake.lower(), "HotSet must be built; DirectStorage removed")
+    require(" hotset)" in cmake, "two-session load-cache host test must run")
     require("IatHook.cpp" in cmake, "IAT hook not built")
     require("cache_policy.cpp" in cmake and "cache_host.cpp" in cmake,
             "production regression checks must be built")
@@ -274,21 +290,13 @@ def main() -> int:
     packager = (ROOT / "package-release.ps1").read_text(encoding="utf-8")
     for token in ["Profiles\\SafeDefault", "Profiles\\Minimal",
                   "Profiles\\ExperimentalWarmCache", "Forbidden build artifacts",
-                  "Get-FileHash", "PACKAGE-NOTICE.txt",
-                  "Public package must not contain DirectStorage"]:
+                  "Get-FileHash", "PACKAGE-NOTICE.txt"]:
         require(token in packager, f"release packager missing {token}")
-    require("Optional\\DirectStorage" not in packager or
-            "intentionally not shipped" in packager,
-            "packager must not stage Optional DirectStorage runtime")
-    # Explicitly reject the old stage path that copied dstorage*.dll into the zip.
-    require("Copy-Item $dsLicense" not in packager,
-            "packager must not copy LICENSE.DirectStorage.txt into public zip")
-    require("dstorage*.dll" not in packager or
-            "must not contain DirectStorage DLLs" in packager,
-            "packager must not ship dstorage runtime DLLs")
+    require("DirectStorage" not in packager and "dstorage" not in packager, "packager must not stage DirectStorage")
 
     workflow = (ROOT / ".github/workflows/build-release.yml").read_text(encoding="utf-8")
-    for token in ["windows-2022", "NuGet/setup-nuget@",  # any major; Dependabot bumps must stay green
+    require("nuget" not in workflow.lower(), "CI no longer downloads the DirectStorage SDK")
+    for token in ["windows-2022",
                   f"NextGenDiskCache-{VERSION}-FOMOD.zip",
                   "build/symbols/NextGenDiskCache.pdb",
                   "python tools/validate_rc.py"]:

@@ -15,16 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: NuGet/setup-nuget@v4
-
       - name: Validate source bundle
         run: python tools/validate_rc.py
-
-      - name: Install DirectStorage 1.3 SDK
-        shell: pwsh
-        run: |
-          nuget install Microsoft.Direct3D.DirectStorage -Version 1.3.0 -OutputDirectory deps/_nuget -NonInteractive
-          Copy-Item deps/_nuget/Microsoft.Direct3D.DirectStorage.1.3.0 deps/directstorage -Recurse
 
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
@@ -42,14 +34,14 @@ jobs:
       - name: Upload FOMOD artifact
         uses: actions/upload-artifact@v7
         with:
-          name: NextGenDiskCache-2.2.1-FOMOD
+          name: NextGenDiskCache-2.3.0-FOMOD
           path: |
-            dist/NextGenDiskCache-2.2.1-FOMOD.zip
-            dist/NextGenDiskCache-2.2.1-SHA256.txt
+            dist/NextGenDiskCache-2.3.0-FOMOD.zip
+            dist/NextGenDiskCache-2.3.0-SHA256.txt
 
       - name: Upload symbols separately
         uses: actions/upload-artifact@v7
         with:
-          name: NextGenDiskCache-2.2.1-symbols
+          name: NextGenDiskCache-2.3.0-symbols
           path: build/symbols/NextGenDiskCache.pdb
           if-no-files-found: warn

@@ -1,46 +1,9 @@
-# Build NextGenDiskCache 2.2.1 (DLL) into package\SKSE\Plugins.
+# Build NextGenDiskCache 2.3.0 (DLL) into package\SKSE\Plugins.
 # Robust across Visual Studio 2019/2022/2026: the CMake generator is derived
-# from whatever vswhere reports, and DirectStorage 1.3 is fetched via nuget.exe
-# when present or a direct nupkg download otherwise.
+# from whatever vswhere reports. No downloads: every dependency is in deps\.
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
-
-# --- DirectStorage 1.3 SDK (header + import lib) -----------------------------
-$ds = Join-Path $here "deps\directstorage"
-if (-not (Test-Path (Join-Path $ds "native\include\dstorage.h"))) {
-    $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
-    if ($nuget) {
-        & $nuget.Source install Microsoft.Direct3D.DirectStorage -Version 1.3.0 `
-            -OutputDirectory (Join-Path $here "deps\_nuget") -NonInteractive
-        if ($LASTEXITCODE -ne 0) { throw "nuget install failed: $LASTEXITCODE" }
-        $pkg = Join-Path $here "deps\_nuget\Microsoft.Direct3D.DirectStorage.1.3.0"
-        if (Test-Path $ds) { Remove-Item $ds -Recurse -Force }
-        Copy-Item $pkg $ds -Recurse
-    } else {
-        # No nuget.exe: a .nupkg is a plain zip. Pull it straight from nuget.org.
-        Write-Host "nuget.exe not found; downloading DirectStorage 1.3.0 nupkg directly"
-        $url = "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.directstorage/1.3.0/microsoft.direct3d.directstorage.1.3.0.nupkg"
-        $tmpPkg = Join-Path $env:TEMP "ngdc_dstorage_1.3.0.nupkg"
-        $tmpDir = Join-Path $env:TEMP "ngdc_dstorage_1.3.0"
-        Invoke-WebRequest -Uri $url -OutFile $tmpPkg -UseBasicParsing
-        if (Test-Path $tmpDir) { Remove-Item $tmpDir -Recurse -Force }
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($tmpPkg, $tmpDir)
-        New-Item -ItemType Directory -Force `
-            (Join-Path $ds "native\include"), (Join-Path $ds "native\bin\x64"), (Join-Path $ds "native\lib\x64") | Out-Null
-        Copy-Item (Join-Path $tmpDir "native\include\*.h")            (Join-Path $ds "native\include\")
-        Copy-Item (Join-Path $tmpDir "native\bin\x64\dstorage*.dll")  (Join-Path $ds "native\bin\x64\")
-        Copy-Item (Join-Path $tmpDir "native\lib\x64\dstorage.lib")   (Join-Path $ds "native\lib\x64\")
-        Copy-Item (Join-Path $tmpDir "LICENSE.txt")                   (Join-Path $ds "LICENSE.txt")
-        if (Test-Path (Join-Path $tmpDir "NOTICES.txt")) {
-            Copy-Item (Join-Path $tmpDir "NOTICES.txt") (Join-Path $ds "NOTICES.txt")
-        }
-    }
-}
-if (-not (Test-Path (Join-Path $ds "native\include\dstorage.h"))) {
-    throw "DirectStorage header still missing after fetch: $ds"
-}
 
 # --- Visual Studio toolchain (version-agnostic) ------------------------------
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -70,7 +33,7 @@ if errorlevel 1 exit /b 1
 cmake --build build --config Release --parallel
 if errorlevel 1 exit /b 1
 "@
-$tmp = Join-Path $env:TEMP "ngdc_build_12.cmd"
+$tmp = Join-Path $env:TEMP "ngdc_build.cmd"
 Set-Content -Path $tmp -Value $cmd -Encoding ASCII
 & cmd.exe /c $tmp
 if ($LASTEXITCODE -ne 0) { throw "Build failed: $LASTEXITCODE" }

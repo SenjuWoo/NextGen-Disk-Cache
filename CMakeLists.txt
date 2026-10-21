@@ -1,19 +1,19 @@
 cmake_minimum_required(VERSION 3.21)
-project(NextGenDiskCache VERSION 2.2.1 LANGUAGES CXX)
+project(NextGenDiskCache VERSION 2.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(NextGenDiskCache SHARED
   src/main.cpp
-  src/DirectStorageBackend.cpp
+  src/HotSet.cpp
   src/IatHook.cpp
 )
 
 include(CTest)
 if(BUILD_TESTING)
-  add_executable(CachePolicyChecks tests/cache_policy.cpp src/DirectStorageBackend.cpp src/IatHook.cpp)
-  target_include_directories(CachePolicyChecks PRIVATE deps/include deps/directstorage/native/include)
+  add_executable(CachePolicyChecks tests/cache_policy.cpp src/HotSet.cpp src/IatHook.cpp)
+  target_include_directories(CachePolicyChecks PRIVATE deps/include)
   target_link_directories(CachePolicyChecks PRIVATE deps/libs/detours)
   target_link_libraries(CachePolicyChecks PRIVATE detours.lib setupapi.lib cfgmgr32.lib)
   target_compile_definitions(CachePolicyChecks PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
@@ -23,7 +23,7 @@ if(BUILD_TESTING)
   add_executable(CacheHost tests/cache_host.cpp src/IatHook.cpp)
   target_include_directories(CacheHost PRIVATE src deps/include)
   target_compile_definitions(CacheHost PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-  foreach(mode observed mapped strided pressure memfail minimal directory late pacing threads inflight wide)
+  foreach(mode observed mapped strided pressure memfail minimal directory late pacing threads inflight wide hotset)
     add_test(NAME host_${mode} COMMAND CacheHost
       "${CMAKE_SOURCE_DIR}/package/SKSE/Plugins/NextGenDiskCache.dll"
       "$<TARGET_FILE:CacheOtherModule>" ${mode})
@@ -32,7 +32,6 @@ endif()
 
 target_include_directories(NextGenDiskCache PRIVATE
   ${CMAKE_SOURCE_DIR}/deps/include
-  ${CMAKE_SOURCE_DIR}/deps/directstorage/native/include
 )
 
 target_link_directories(NextGenDiskCache PRIVATE

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "2.2.1",
+    [string]$Version = "2.3.0",
     [switch]$SkipBuild
 )
 
@@ -49,17 +49,12 @@ $rootDocs = @(
     "LICENSE.txt",
     "LICENSE.Archost-DiskCacheEnabler.txt",
     "LICENSE.detours.txt",
-    "LICENSE.DirectStorage-Code.txt",
     "LICENSE.SKSE64.txt"
 )
 foreach ($doc in $rootDocs) {
     if (-not (Test-Path $doc)) { throw "Missing release document: $doc" }
     Copy-Item $doc $stage
 }
-
-# DirectStorage runtime is intentionally not shipped in the public package.
-# The plugin is compiled against DirectStorage SDK headers, so the SDK code-license
-# notice is included even though runtime DLLs are omitted and all profiles leave it off.
 
 # FOMOD and payload gates.
 [xml]$moduleConfig = Get-Content (Join-Path $stage "fomod\ModuleConfig.xml") -Raw
@@ -68,24 +63,11 @@ if ($moduleConfig.config.moduleName -ne "NextGen Disk Cache $Version") {
 }
 if ($moduleConfig.config.installSteps.installStep.Count -ne 1 -and
     @($moduleConfig.config.installSteps.installStep).Count -ne 1) {
-    # Single "Choose a build" step only (no DirectStorage step).
+    # Single "Choose a build" step only.
     $stepCount = @($moduleConfig.config.installSteps.installStep).Count
     if ($stepCount -ne 1) {
         throw "FOMOD must contain exactly one install step (profiles only); found $stepCount"
     }
-}
-
-$dsFolders = Get-ChildItem $stage -Recurse -Directory -Filter "DirectStorage" -ErrorAction SilentlyContinue
-if ($dsFolders) {
-    throw "Public package must not contain DirectStorage runtime folders: $($dsFolders.FullName -join ', ')"
-}
-$dsDlls = Get-ChildItem $stage -Recurse -File -Filter "dstorage*.dll" -ErrorAction SilentlyContinue
-if ($dsDlls) {
-    throw "Public package must not contain DirectStorage DLLs: $($dsDlls.FullName -join ', ')"
-}
-$dsLicense = Join-Path $stage "LICENSE.DirectStorage.txt"
-if (Test-Path $dsLicense) {
-    throw "Public package must not contain LICENSE.DirectStorage.txt when runtime is omitted"
 }
 
 $forbidden = Get-ChildItem $stage -Recurse -File | Where-Object {
@@ -115,4 +97,3 @@ $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 Write-Host "RELEASE PACKAGE OK"
 Write-Host "ZIP: $zip"
 Write-Host "SHA256: $hash"
-Write-Host "NOTE: DirectStorage runtime intentionally omitted from public package"

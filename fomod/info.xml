@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <fomod>
   <Name>NextGen Disk Cache</Name>
-  <Author>Archost; derivative maintained by ShugokiFable</Author>
-  <Version>2.2.1</Version>
+  <Author>Archost; derivative maintained by SenjuWoo</Author>
+  <Version>2.3.0</Version>
   <Website>https://github.com/SenjuWoo/NextGen-Disk-Cache</Website>
-  <Description>A conservative SKSE64 file-cache plugin that modifies only eligible read-only BSA/BA2 archive opens. Includes Safe, Minimal and clearly labelled Experimental profiles. Saves, plugins and loose assets are never modified. Performance gains are not guaranteed.</Description>
+  <Description>An SKSE64 load cache. It learns which game files and archive ranges Skyrim reads at start-up and during the first save load, then reads exactly that data into the Windows file cache in parallel at the next launch. Recording never changes a game request; saves and writes are never touched. Includes Safe, Minimal and Experimental profiles and logs load timings so you can measure the gain.</Description>
 </fomod>

@@ -1,6 +1,27 @@
 NextGen Disk Cache - Public Release History
 ===========================================
 
+2.3.0
+-----
+- New: learned load cache (HotSet). Each session records which game files and
+  which parts of each archive Skyrim actually reads from start-up until shortly
+  after your first save load. The next launch reads exactly that data in
+  parallel, as soon as SKSE loads the plugin, so the main menu and the first
+  save load find it in RAM instead of waiting on the disk one request at a time.
+  Recording only observes; no game request is changed. Changed or missing mod
+  files are skipped. The profile lives next to the log.
+- New: every session logs how long the game data load and each save load took,
+  so you can compare a cold boot with Safe against Minimal yourself.
+- Safe now uses HotSet instead of the old archive warmer. A real 2.2.1 session
+  showed why: the warmer split its budget into ~2 MB per archive, which is the
+  archive header Skyrim had already read, and it only ran after the save load.
+- Experimental keeps the old warmer and the wider hooks alongside HotSet.
+  Minimal stays the everything-off comparison.
+- Removed the disabled DirectStorage backend. DirectStorage reads bypass the
+  Windows file cache that Skyrim reads from, and the engine never issues
+  DirectStorage requests, so it cannot speed up Skyrim. Old INI keys are ignored.
+- Saves, cosaves, writes and files outside Data are never recorded or read.
+
 2.1.0
 -----
 - Safe profile no longer applies FILE_FLAG_RANDOM_ACCESS. That hint disables the
@@ -421,3 +442,14 @@ Notes:
 - Corrected the completion reason: later empty-batch memory replanning no longer mislabels a completed session as having no RAM headroom. Added a regression to the actual-DLL host.
 - Safe limits, archive eligibility, save/memory guards, installer choices and custom opt-outs are unchanged from the tested 2.2.0 candidate.
 - This is the first public release of the active Safe warming introduced in 2.2.0. Install the full FOMOD and choose Safe when upgrading from a warming-disabled profile.
+
+2.3.0 - 2026-10-21 learned load cache (parent: d91f528 / 2.2.1)
+----------------------------------------------------------------
+- Audit of the user's 2026-10-21 Safe session (2.2.1 CI DLL, Skyrim 1.6.1170, SKSE 2.2.8): patched=0 over 54,784 opens; DataLoaded ~80 s after plugin load; the warmer started 15 s later, paused through the save load and split 1024 MB into ~2 MB per archive (archive headers already read while opening them).
+- HotSet (src/HotSet.*): observe SkyrimSE.exe CreateFileA/W, ReadFile and ReadFileEx through its import table only; record Data files opened read-only with read sharing and the 64 KiB ranges read from BSA/BA2; stop iHotSetRecordSecs after the first PostLoadGame/NewGame. File positions are queried with NtQueryInformationFile, never written. Merge with the previous profile (age cap), cap at twice the prefetch budget, save via temp file + MoveFileEx.
+- Prefetch at plugin load: validate every line (header, Data folder, numbers, ranges inside the file, relative path that cannot leave Data), skip files whose size/mtime changed, read in first-use order with 8 MB pieces shared by 4 (NVMe) / 2 (SATA, unknown) threads, skip on HDD, stop at the RAM reserve or iHotSetMaxSecs. Shared read-only handles opened through the unhooked CreateFileW.
+- Timing log lines for DataLoaded and each PreLoadGame->PostLoadGame.
+- Profiles: Safe = HotSet on, warmer off (automatic budget); Experimental = HotSet (6144 MB, 180 s) + 2.2.x warmer and wide hooks; Minimal = all off. Compiled default for bEnableWarmCache is now 0.
+- Removed DirectStorageBackend, the SDK NuGet fetch in build.ps1 and CI, and LICENSE.DirectStorage-Code.txt. [DirectStorage] keys are ignored.
+- ObserveArchive dedupe uses a hash set; uncalled DetachHooks removed; DLL imports unchanged (SETUPAPI, KERNEL32, SHELL32).
+- Tests: HotSet unit checks in cache_policy; new host_hotset two-session actual-DLL test; legacy host modes pin the load cache off and pass unchanged.

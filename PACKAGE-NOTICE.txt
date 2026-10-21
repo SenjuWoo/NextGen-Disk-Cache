@@ -1,11 +1,14 @@
 NextGen Disk Cache - Public Package Notice
 ================================================
 
-This package does not include the Microsoft DirectStorage runtime DLLs.
-The plugin contains an optional DirectStorage backend compiled against SDK
-headers, but probing and warm reads are disabled in every supplied profile.
-The Microsoft DirectStorage SDK code-license notice is included accordingly.
+The Safe profile is recommended. It records which game files and archive ranges
+Skyrim reads, and prefetches them at the next launch. The first launch after
+installing only records.
 
-The Safe profile is recommended. Performance improvements are not guaranteed;
-no public comparative in-game benchmark or complete runtime compatibility matrix
-has been published for this release.
+Performance improvements are not guaranteed; no public comparative in-game
+benchmark or complete runtime compatibility matrix has been published for this
+release. Each log contains "Timing:" lines so you can compare Safe and Minimal
+on your own system, ideally after a restart.
+
+DirectStorage was removed in 2.3.0; this package contains no DirectStorage code
+or runtime files.

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
-  <moduleName>NextGen Disk Cache 2.2.1</moduleName>
+  <moduleName>NextGen Disk Cache 2.3.0</moduleName>
   <requiredInstallFiles>
     <folder source="Core" destination="" priority="0" />
   </requiredInstallFiles>
@@ -10,11 +10,11 @@
         <group name="Safe or Experimental" type="SelectExactlyOne">
           <plugins order="Explicit">
             <plugin name="Safe (Recommended)">
-              <description>Active bounded archive warming. Keeps the narrow SkyrimSE.exe import hook and unchanged save/write/async safety gates. It observes successful read-only BSA/BA2 opens under game Data and warms those archives through separate read-only buffered handles, including archives opened later during the work window.
+              <description>Learned load cache. Each session records which game files and which parts of each BSA/BA2 archive Skyrim reads, from start-up until 90 seconds after your first save load. The next launch reads exactly that data back into the Windows file cache in parallel as soon as SKSE loads the plugin, so the main menu and the first save load are served from RAM instead of waiting on the disk one request at a time. The first launch only records.
 
-Limits: 1024 MB per process session, 64 MB per archive, 512 distinct archives, 64 MB/s aggregate, one low-priority worker, 15 seconds after SKSE DataLoaded and a 180-second work window. Drive-only tuning reduces rate to 32 MB/s on SATA SSD, 8 MB/s on HDD and 16 MB/s when detection is inconclusive; HDD budget is reduced to 256 MB. RAM reserve checks run between chunks and save-load messages pause reads.
+Recording observes the game's own requests through SkyrimSE.exe's imports and never changes them. Saves, cosaves, writes and files outside Data are never recorded or read. Files changed since they were recorded are skipped. Prefetch size is automatic (1/8 of RAM, 512-4096 MB), stops at the RAM reserve and after 120 seconds, and is skipped on hard disks.
 
-No random-access hint, process-wide hook, full hardware enumeration, working-set expansion or DirectStorage. Logs report completed reads and explain inactivity. Cache retention and in-game performance depend on Windows and the workload.</description>
+The log records how long the data load and each save load took. Compare a cold boot (after a restart) against Minimal to see your gain.</description>
               <files>
                 <folder source="Profiles\SafeDefault" destination="SKSE\Plugins" priority="10" />
               </files>
@@ -23,7 +23,7 @@ No random-access hint, process-wide hook, full hardware enumeration, working-set
               </typeDescriptor>
             </plugin>
             <plugin name="Minimal (troubleshooting)">
-              <description>Warming-disabled control for troubleshooting and comparison. Same narrow executable-only archive flag policy as Safe, with random-access hints and process changes disabled. No background archive reads, hardware probing or automatic tuning. Statistics remain enabled so an inactive flag policy is visible in the log.</description>
+              <description>Everything off: no load cache, no archive warming, no hardware probing, no process changes. The narrow SkyrimSE.exe archive flag policy stays loaded and statistics and load timings are still logged, so this is the control for comparing load times against Safe.</description>
               <files>
                 <folder source="Profiles\Minimal" destination="SKSE\Plugins" priority="10" />
               </files>
@@ -32,11 +32,9 @@ No random-access hint, process-wide hook, full hardware enumeration, working-set
               </typeDescriptor>
             </plugin>
             <plugin name="Experimental (unproven - benchmark it)">
-              <description>Larger archive warmer with process-wide Detours interception, the random-access archive hint, hardware profiling and the legacy EcoQoS opt-out. These options change a wider part of the process than Safe.
+              <description>The Safe load cache with a larger 6144 MB prefetch cap and 180 seconds of recorded gameplay, plus the older options testers have run on long saves: the background archive warmer (2048 MB, strided sampling), process-wide Detours file hooks, the random-access archive hint, hardware profiling and the EcoQoS opt-out.
 
-Limits: 2048 MB per process session, 128 MB per archive, 512 observed archives, 128 MB/s aggregate, one worker, 30 seconds after DataLoaded, a 180-second work window and strided sampling. Drive and RAM checks can only reduce these limits. Save-load messages pause warming. DirectStorage stays disabled.
-
-Compare loading and traversal against Safe and Minimal using the same save and route. This profile has no measured gameplay advantage.</description>
+These extras change a wider part of the process than Safe and have no measured loading advantage. Compare against Safe with the same save after a restart.</description>
               <files>
                 <folder source="Profiles\ExperimentalWarmCache" destination="SKSE\Plugins" priority="10" />
               </files>
