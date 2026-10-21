@@ -6,7 +6,7 @@
 | **This folder** | git root (``origin`` should already point here) |
 | **Parent package** | ``..\`` version folders for ship zips |
 
-Current release snapshot: 2.2.1, linked worktree on `agent/release-cache-2.2.1`.
+Current release snapshot: 2.3.0, linked worktree on `agent/hotset-2.3.0`.
 Canonical object store: sibling `source/`; do not create another repository.
 The existing origin URL redirects to `SenjuWoo/NextGen-Disk-Cache` (verified
 2026-09-29). Keep normal changes on a scoped branch and use a PR with the required

@@ -26,6 +26,13 @@
 // CreateFile flags. Extensions: CreateFileW, path classes, process hints,
 // optional warm-cache, INI, file logging.
 //
+// 2.3.0: learned load cache (HotSet.cpp). The executable's file opens and
+// archive reads are observed (never changed) until shortly after the first
+// save load; the next launch prefetches exactly that data in parallel at
+// plugin load. Session timing is logged so the effect can be measured.
+// The DirectStorage backend was removed: its reads bypass the Windows file
+// cache Skyrim reads from, so it could never speed the game up.
+//
 // 1.1.0: hardware profiler (X3D / L3 topology, DDR generation + speed via
 // SMBIOS, NVMe/SATA/HDD game drive, GPU BAR size -> Resizable BAR state),
 // bounded optional warm cache with PrefetchVirtualMemory, low I/O
@@ -52,6 +59,7 @@
 #include <algorithm>
 #include <memory>
 #include <cmath>
+#include <unordered_set>
 
 #include <Windows.h>
 #include <ShlObj.h>
@@ -73,7 +81,7 @@
 
 // Detours
 #include <detours/detours.h>
-#include "DirectStorageBackend.h"
+#include "HotSet.h"
 #include "IatHook.h"
 
 #define SKSEAPI extern "C" __declspec(dllexport)
@@ -85,8 +93,8 @@
 // Nexus uploads (1.1.2 / 1.1.3) used a separate numbering scheme from the git
 // tags (1.3.0 / 1.4.x), which made user bug reports impossible to map onto a
 // commit. From here the DLL, the tag, and the Nexus file all read the same.
-#define PLUGIN_VERSION ((2u << 16) | (2u << 8) | 1u) // 2.2.1
-#define PLUGIN_VERSION_STRING "2.2.1"
+#define PLUGIN_VERSION ((2u << 16) | (3u << 8) | 0u) // 2.3.0
+#define PLUGIN_VERSION_STRING "2.3.0"
 
 // ---------------------------------------------------------------------------
 // Settings (INI)
@@ -143,7 +151,10 @@ struct Settings {
 	bool preferFastCores = false;  // legacy whole-process hint, still opt-in
 	bool placeWarmThreadsOnBackgroundCores = false;
 
-	bool enableWarmCache = true;
+	// Legacy archive warmer. Off by default since 2.3.0: in a real session it
+	// spread its budget to ~2 MB per archive (headers the game had already read)
+	// and ran only after the save load. HotSet below replaces it in Safe.
+	bool enableWarmCache = false;
 	bool warmCacheOnlyObservedArchives = true;
 	unsigned warmCacheDelaySecs = 15;
 	unsigned warmCacheDurationSecs = 180;
@@ -160,11 +171,15 @@ struct Settings {
 	bool stopWarmCacheOnMemoryPressure = true;
 	int warmCacheThreadPriority = THREAD_PRIORITY_LOWEST;
 
-	bool directStorageProbe = false;
-	bool directStorageWarmRead = false; // experimental: raw read, not OS cache population
-	unsigned directStorageQueueCapacity = 128;
-	unsigned directStorageBatchMB = 64;
-	unsigned directStorageTimeoutMs = 30000;
+	// Learned load cache (HotSet.cpp).
+	bool hotSetRecord = true;
+	bool hotSetPrefetch = true;
+	unsigned hotSetBudgetMB = 0;     // 0 = automatic: 1/8 of RAM, 512-4096 MB
+	unsigned hotSetThreads = 0;      // 0 = by drive: NVMe 4, SATA/unknown 2, HDD skipped
+	unsigned hotSetRecordSecs = 90;  // gameplay recorded after the first save load
+	unsigned hotSetMaxSecs = 120;    // prefetch deadline from plugin load
+	unsigned hotSetMaxAge = 4;       // sessions a file may go unread before it is dropped
+	bool hotSetLowIoPriority = false;
 
 	bool logToFile = true;
 	bool logToPluginDirectory = false;
@@ -193,8 +208,16 @@ static std::wstring g_dataPath;
 static std::mutex g_archiveMutex;
 static std::vector<std::wstring> g_observedArchives;
 static size_t g_observedNext = 0; // only the coordinator advances it
+static std::unordered_set<std::wstring> g_observedKeys; // upper-case paths, guarded by g_archiveMutex
 static std::atomic<uint64_t> g_archiveQueueDropped{0};
 static std::atomic<uint64_t> g_archivesObserved{0};
+
+// Session timing (GetTickCount64). Logged so a cold boot can be compared with
+// and without the load cache; nothing else depends on them.
+static ULONGLONG g_pluginLoadTick = 0;
+static std::atomic<ULONGLONG> g_loadStartTick{0};
+static std::atomic<ULONGLONG> g_firstLoadDoneTick{0};
+static std::atomic<uint64_t> g_hotSetPrefetchedBytes{0};
 
 // Newer kernel32 APIs resolved at runtime so the DLL still loads on Win7/8.1.
 using PrefetchVirtualMemory_t = BOOL(WINAPI*)(HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
@@ -202,7 +225,11 @@ using GetSystemCpuSetInformation_t = BOOL(WINAPI*)(PSYSTEM_CPU_SET_INFORMATION, 
 using SetProcessDefaultCpuSets_t = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
 using SetThreadSelectedCpuSets_t = BOOL(WINAPI*)(HANDLE, const ULONG*, ULONG);
 using SetThreadInformation_t = BOOL(WINAPI*)(HANDLE, THREAD_INFORMATION_CLASS, LPVOID, DWORD);
+// Query-only position lookup for recorded archive reads. SetFilePointerEx would
+// also write the position back, which could race a game thread's own seek.
+using NtQueryInformationFile_t = LONG(NTAPI*)(HANDLE, PVOID, PVOID, ULONG, ULONG);
 static PrefetchVirtualMemory_t g_pPrefetchVirtualMemory = nullptr;
+static NtQueryInformationFile_t g_pNtQueryInformationFile = nullptr;
 static GetSystemCpuSetInformation_t g_pGetSystemCpuSetInformation = nullptr;
 static SetProcessDefaultCpuSets_t g_pSetProcessDefaultCpuSets = nullptr;
 static SetThreadSelectedCpuSets_t g_pSetThreadSelectedCpuSets = nullptr;
@@ -223,6 +250,9 @@ static void ResolveDynamicApis()
 		reinterpret_cast<SetThreadSelectedCpuSets_t>(GetProcAddress(k32, "SetThreadSelectedCpuSets"));
 	g_pSetThreadInformation =
 		reinterpret_cast<SetThreadInformation_t>(GetProcAddress(k32, "SetThreadInformation"));
+	if (HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"))
+		g_pNtQueryInformationFile =
+			reinterpret_cast<NtQueryInformationFile_t>(GetProcAddress(ntdll, "NtQueryInformationFile"));
 }
 
 static void Log(const char* fmt, ...)
@@ -248,7 +278,8 @@ static void Log(const char* fmt, ...)
 	}
 }
 
-static std::wstring GetSkseLogPath()
+// Directory for the log and the HotSet profile, with a trailing backslash.
+static std::wstring GetSkseOutputDir()
 {
 	wchar_t docs[MAX_PATH] = {};
 	if (g_settings.logToPluginDirectory) {
@@ -256,7 +287,7 @@ static std::wstring GetSkseLogPath()
 			return {};
 		std::wstring path = docs;
 		const auto slash = path.find_last_of(L"\\/");
-		return slash == std::wstring::npos ? L"" : path.substr(0, slash + 1) + L"NextGenDiskCache.log";
+		return slash == std::wstring::npos ? L"" : path.substr(0, slash + 1);
 	}
 	if (FAILED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, SHGFP_TYPE_CURRENT, docs)))
 		return {};
@@ -271,16 +302,17 @@ static std::wstring GetSkseLogPath()
 		else
 			SHCreateDirectoryExW(nullptr, base.c_str(), nullptr);
 	}
-	return base + L"\\NextGenDiskCache.log";
+	return base + L"\\";
 }
 
 static void OpenLog()
 {
 	if (!g_settings.logToFile)
 		return;
-	const auto path = GetSkseLogPath();
-	if (path.empty())
+	const auto dir = GetSkseOutputDir();
+	if (dir.empty())
 		return;
+	const auto path = dir + L"NextGenDiskCache.log";
 	std::lock_guard<std::mutex> lock(g_logMutex);
 	g_log.open(path, std::ios::out | std::ios::trunc);
 }
@@ -443,16 +475,22 @@ static void LoadIniFromPath(const wchar_t* path)
 			g_settings.warmCacheReserveMB = ParseUnsigned(val, g_settings.warmCacheReserveMB);
 		else if (_stricmp(key, "bStopWarmCacheOnMemoryPressure") == 0)
 			g_settings.stopWarmCacheOnMemoryPressure = ParseBool(val, g_settings.stopWarmCacheOnMemoryPressure);
-		else if (_stricmp(key, "bDirectStorageProbe") == 0)
-			g_settings.directStorageProbe = ParseBool(val, g_settings.directStorageProbe);
-		else if (_stricmp(key, "bDirectStorageWarmRead") == 0)
-			g_settings.directStorageWarmRead = ParseBool(val, g_settings.directStorageWarmRead);
-		else if (_stricmp(key, "iDirectStorageQueueCapacity") == 0)
-			g_settings.directStorageQueueCapacity = ParseUnsigned(val, g_settings.directStorageQueueCapacity);
-		else if (_stricmp(key, "iDirectStorageBatchMB") == 0)
-			g_settings.directStorageBatchMB = ParseUnsigned(val, g_settings.directStorageBatchMB);
-		else if (_stricmp(key, "iDirectStorageTimeoutMs") == 0)
-			g_settings.directStorageTimeoutMs = ParseUnsigned(val, g_settings.directStorageTimeoutMs);
+		else if (_stricmp(key, "bHotSetRecord") == 0)
+			g_settings.hotSetRecord = ParseBool(val, g_settings.hotSetRecord);
+		else if (_stricmp(key, "bHotSetPrefetch") == 0)
+			g_settings.hotSetPrefetch = ParseBool(val, g_settings.hotSetPrefetch);
+		else if (_stricmp(key, "iHotSetBudgetMB") == 0)
+			g_settings.hotSetBudgetMB = ParseUnsigned(val, g_settings.hotSetBudgetMB);
+		else if (_stricmp(key, "iHotSetThreads") == 0)
+			g_settings.hotSetThreads = ParseUnsigned(val, g_settings.hotSetThreads);
+		else if (_stricmp(key, "iHotSetRecordSecs") == 0)
+			g_settings.hotSetRecordSecs = ParseUnsigned(val, g_settings.hotSetRecordSecs);
+		else if (_stricmp(key, "iHotSetMaxSecs") == 0)
+			g_settings.hotSetMaxSecs = ParseUnsigned(val, g_settings.hotSetMaxSecs);
+		else if (_stricmp(key, "iHotSetMaxAge") == 0)
+			g_settings.hotSetMaxAge = ParseUnsigned(val, g_settings.hotSetMaxAge);
+		else if (_stricmp(key, "bHotSetLowIoPriority") == 0)
+			g_settings.hotSetLowIoPriority = ParseBool(val, g_settings.hotSetLowIoPriority);
 		else if (_stricmp(key, "bLogToFile") == 0)
 			g_settings.logToFile = ParseBool(val, g_settings.logToFile);
 		else if (_stricmp(key, "bLogToPluginDirectory") == 0)
@@ -495,13 +533,11 @@ static void SanitizeSettings()
 	g_settings.warmCacheThreads = ClampUnsigned(g_settings.warmCacheThreads, 0, 8);
 	g_settings.warmCacheStrideMB = ClampUnsigned(g_settings.warmCacheStrideMB, 32, 4096);
 	g_settings.warmCacheReserveMB = ClampUnsigned(g_settings.warmCacheReserveMB, 0, 131072);
-	g_settings.directStorageQueueCapacity =
-		ClampUnsigned(g_settings.directStorageQueueCapacity, 32, 8192);
-	g_settings.directStorageBatchMB = ClampUnsigned(g_settings.directStorageBatchMB, 8, 256);
-	g_settings.directStorageTimeoutMs = ClampUnsigned(g_settings.directStorageTimeoutMs, 1000, 120000);
-
-	if (!g_settings.directStorageProbe)
-		g_settings.directStorageWarmRead = false;
+	g_settings.hotSetBudgetMB = ClampUnsigned(g_settings.hotSetBudgetMB, 0, 16384);
+	g_settings.hotSetThreads = ClampUnsigned(g_settings.hotSetThreads, 0, 8);
+	g_settings.hotSetRecordSecs = ClampUnsigned(g_settings.hotSetRecordSecs, 1, 1800);
+	g_settings.hotSetMaxSecs = ClampUnsigned(g_settings.hotSetMaxSecs, 5, 600);
+	g_settings.hotSetMaxAge = ClampUnsigned(g_settings.hotSetMaxAge, 1, 16);
 }
 
 static void LoadSettings()
@@ -612,11 +648,24 @@ static PathKind ClassifyPathW(const wchar_t* path)
 // delete intent, async completion, write-through durability, delete-on-close,
 // or any disposition that can create/truncate. Shared by the flag computation
 // and the statistics counter so the log can never disagree with the policy.
+static constexpr DWORD kWriteIntent = GENERIC_WRITE | GENERIC_ALL | MAXIMUM_ALLOWED |
+	FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
+	WRITE_DAC | WRITE_OWNER | DELETE;
+
+// The load cache may observe a wider set than the flag policy may change:
+// asynchronous (overlapped) read handles are recorded, because observing them
+// alters nothing. Anything that can write, create, delete or open a directory
+// or reparse point is never recorded or prefetched.
+static bool IsRecordableOpen(DWORD flags, DWORD desiredAccess, DWORD creationDisposition)
+{
+	return creationDisposition == OPEN_EXISTING &&
+		(desiredAccess & (GENERIC_READ | FILE_READ_DATA)) != 0 &&
+		(desiredAccess & kWriteIntent) == 0 &&
+		(flags & (FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)) == 0;
+}
+
 static bool IsSafetyGated(DWORD flags, DWORD desiredAccess, DWORD creationDisposition)
 {
-	const DWORD kWriteIntent = GENERIC_WRITE | GENERIC_ALL | MAXIMUM_ALLOWED |
-		FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
-		WRITE_DAC | WRITE_OWNER | DELETE;
 	const DWORD kSensitiveFlags = FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH |
 		FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS;
 	return creationDisposition != OPEN_EXISTING ||
@@ -746,6 +795,24 @@ static HANDLE(WINAPI* CreateFileA_orig)(
 static HANDLE(WINAPI* CreateFileW_orig)(
 	LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE) = CreateFileW;
 
+// Resolves `path` into `absolute` and returns the absolute path when it lies
+// below the game's Data folder, else nullptr. No I/O: string work only.
+static const wchar_t* PathUnderData(const wchar_t* path, wchar_t (&absolute)[MAX_PATH]) noexcept
+{
+	if (!path || g_dataPath.empty())
+		return nullptr;
+	const DWORD n = GetFullPathNameW(path, MAX_PATH, absolute, nullptr);
+	if (!n || n >= MAX_PATH)
+		return nullptr;
+	const wchar_t* logical = absolute;
+	if (wcsncmp(logical, L"\\\\?\\", 4) == 0)
+		logical += 4;
+	if (_wcsnicmp(logical, g_dataPath.c_str(), g_dataPath.size()) != 0 ||
+		logical[g_dataPath.size()] != L'\\')
+		return nullptr;
+	return logical;
+}
+
 // Capture only successful game archive reads. The bounded queue never waits for
 // the background worker and never performs disk I/O in the game's open hook.
 static void ObserveArchive(const wchar_t* path) noexcept
@@ -753,34 +820,45 @@ static void ObserveArchive(const wchar_t* path) noexcept
 	if (!path || !g_settings.enableWarmCache || g_warmFinished.load(std::memory_order_relaxed))
 		return;
 	wchar_t absolute[MAX_PATH] = {};
-	const DWORD n = GetFullPathNameW(path, MAX_PATH, absolute, nullptr);
-	if (!n || n >= MAX_PATH || g_dataPath.empty())
-		return;
-	const wchar_t* logical = absolute;
-	if (wcsncmp(logical, L"\\\\?\\", 4) == 0)
-		logical += 4;
-	if (_wcsnicmp(logical, g_dataPath.c_str(), g_dataPath.size()) != 0 ||
-		logical[g_dataPath.size()] != L'\\')
+	const wchar_t* logical = PathUnderData(path, absolute);
+	if (!logical)
 		return;
 	try {
+		std::wstring key = HotSetPathKey(logical);
 		std::unique_lock<std::mutex> lock(g_archiveMutex, std::try_to_lock);
 		if (!lock.owns_lock()) {
 			g_archiveQueueDropped.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
-		for (const auto& existing : g_observedArchives) {
-			if (_wcsicmp(existing.c_str(), logical) == 0)
-				return;
-		}
+		if (g_observedKeys.count(key))
+			return;
 		if (g_observedArchives.size() >= g_settings.warmCacheMaxFiles) {
 			g_archiveQueueDropped.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
 		g_observedArchives.emplace_back(logical);
+		g_observedKeys.insert(std::move(key));
 		g_archivesObserved.fetch_add(1, std::memory_order_relaxed);
 	} catch (...) {
 		g_archiveQueueDropped.fetch_add(1, std::memory_order_relaxed);
 	}
+}
+
+// Load-cache bookkeeping for a successful open: remember Data files opened for
+// reading, and forget a reused handle value for anything else.
+static void RecordOpen(HANDLE result, const wchar_t* path, PathKind kind,
+	DWORD desiredAccess, DWORD shareMode, DWORD creationDisposition, DWORD flags) noexcept
+{
+	if (result == INVALID_HANDLE_VALUE)
+		return;
+	wchar_t absolute[MAX_PATH] = {};
+	const wchar_t* logical = nullptr;
+	// A file the game opened without FILE_SHARE_READ is never prefetched: our
+	// read handle could otherwise make a later exclusive game open fail.
+	if (kind != PathKind::Save && kind != PathKind::LogOrTemp && (shareMode & FILE_SHARE_READ) &&
+		IsRecordableOpen(flags, desiredAccess, creationDisposition))
+		logical = PathUnderData(path, absolute);
+	HotSetRecordOpen(result, logical ? logical + g_dataPath.size() + 1 : nullptr, kind == PathKind::Archive);
 }
 
 static HANDLE WINAPI CreateFileA_hook(
@@ -808,12 +886,17 @@ static HANDLE WINAPI CreateFileA_hook(
 		dwCreationDisposition, flags, hTemplateFile);
 	const DWORD resultError = GetLastError();
 	CountSuccessfulPolicyChange(result, dwFlagsAndAttributes, flags);
-	if (result != INVALID_HANDLE_VALUE && kind == PathKind::Archive &&
-		!IsSafetyGated(dwFlagsAndAttributes, dwDesiredAccess, dwCreationDisposition)) {
+	const bool observe = kind == PathKind::Archive &&
+		!IsSafetyGated(dwFlagsAndAttributes, dwDesiredAccess, dwCreationDisposition);
+	const bool record = HotSetRecording();
+	if (result != INVALID_HANDLE_VALUE && (observe || record)) {
 		wchar_t wide[MAX_PATH] = {};
 		const UINT codepage = AreFileApisANSI() ? CP_ACP : CP_OEMCP;
-		if (MultiByteToWideChar(codepage, 0, lpFilename, -1, wide, MAX_PATH))
+		const bool converted = lpFilename && MultiByteToWideChar(codepage, 0, lpFilename, -1, wide, MAX_PATH);
+		if (observe && converted)
 			ObserveArchive(wide);
+		if (record)
+			RecordOpen(result, converted ? wide : nullptr, kind, dwDesiredAccess, dwShareMode, dwCreationDisposition, dwFlagsAndAttributes);
 	}
 	SetLastError(resultError);
 	return result;
@@ -847,8 +930,67 @@ static HANDLE WINAPI CreateFileW_hook(
 	if (result != INVALID_HANDLE_VALUE && kind == PathKind::Archive &&
 		!IsSafetyGated(dwFlagsAndAttributes, dwDesiredAccess, dwCreationDisposition))
 		ObserveArchive(lpFilename);
+	if (HotSetRecording())
+		RecordOpen(result, lpFilename, kind, dwDesiredAccess, dwShareMode, dwCreationDisposition, dwFlagsAndAttributes);
 	SetLastError(resultError);
 	return result;
+}
+
+// ---------------------------------------------------------------------------
+// ReadFile / ReadFileEx observation (load cache recording, executable IAT only)
+// ---------------------------------------------------------------------------
+static BOOL(WINAPI* ReadFile_orig)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED) = ReadFile;
+static BOOL(WINAPI* ReadFileEx_orig)(HANDLE, LPVOID, DWORD, LPOVERLAPPED, LPOVERLAPPED_COMPLETION_ROUTINE) = ReadFileEx;
+
+static uint64_t OverlappedOffset(const OVERLAPPED* at)
+{
+	return (static_cast<uint64_t>(at->OffsetHigh) << 32) | at->Offset;
+}
+
+// Position of a synchronous handle before the read. Query only, never set.
+static bool CurrentFileOffset(HANDLE file, uint64_t& offset)
+{
+	struct { ULONG_PTR status; ULONG_PTR information; } ioStatus{}; // IO_STATUS_BLOCK layout
+	LARGE_INTEGER position{};
+	constexpr ULONG kFilePositionInformation = 14;
+	if (!g_pNtQueryInformationFile ||
+		g_pNtQueryInformationFile(file, &ioStatus, &position, sizeof(position), kFilePositionInformation) < 0 ||
+		position.QuadPart < 0)
+		return false;
+	offset = static_cast<uint64_t>(position.QuadPart);
+	return true;
+}
+
+static BOOL WINAPI ReadFile_hook(HANDLE file, LPVOID buffer, DWORD toRead, LPDWORD read, LPOVERLAPPED overlapped)
+{
+	// Fast path for every read outside recording, and for every untracked handle.
+	if (!HotSetRecording() || !HotSetIsTrackedArchive(file))
+		return ReadFile_orig(file, buffer, toRead, read, overlapped);
+	const DWORD entryError = GetLastError();
+	uint64_t offset = 0;
+	// Read the caller's offset before the call: afterwards the kernel may own it.
+	const bool known = overlapped ? (offset = OverlappedOffset(overlapped), true) : CurrentFileOffset(file, offset);
+	SetLastError(entryError);
+	const BOOL ok = ReadFile_orig(file, buffer, toRead, read, overlapped);
+	const DWORD resultError = GetLastError();
+	if (known && (ok || resultError == ERROR_IO_PENDING))
+		HotSetRecordRead(file, offset, ok && read ? *read : toRead);
+	SetLastError(resultError);
+	return ok;
+}
+
+static BOOL WINAPI ReadFileEx_hook(HANDLE file, LPVOID buffer, DWORD toRead, LPOVERLAPPED overlapped,
+	LPOVERLAPPED_COMPLETION_ROUTINE completion)
+{
+	const bool tracked = overlapped && HotSetRecording() && HotSetIsTrackedArchive(file);
+	const uint64_t offset = tracked ? OverlappedOffset(overlapped) : 0;
+	const BOOL ok = ReadFileEx_orig(file, buffer, toRead, overlapped, completion);
+	if (tracked && ok) {
+		const DWORD resultError = GetLastError();
+		HotSetRecordRead(file, offset, toRead);
+		SetLastError(resultError);
+	}
+	return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -1537,7 +1679,6 @@ static std::atomic<uint64_t> g_warmBytes{0};
 static std::atomic<uint32_t> g_warmFilesTouched{0};
 static std::atomic<uint64_t> g_warmReadBytes{0};
 static std::atomic<uint64_t> g_prefetchRequestedBytes{0};
-static std::atomic<uint64_t> g_rawDiscardBytes{0};
 static std::atomic<uint64_t> g_warmFailures{0};
 static std::atomic<uint64_t> g_warmMemoryPauses{0};
 static std::atomic<uint64_t> g_warmLoadPauses{0};
@@ -1601,7 +1742,7 @@ static void LogStatsSnapshot()
 	const uint64_t stripped = g_noBufferingStripped.load();
 	Log("Stats snapshot: opens=%llu patched=%llu no_buffering_stripped=%llu "
 		"in_scope_safety_gated=%llu warm_read=%llu MB warm_read_bytes=%llu "
-		"prefetch_requested_bytes=%llu raw_discarded_bytes=%llu observed_archives=%llu "
+		"prefetch_requested_bytes=%llu hotset_prefetched_bytes=%llu observed_archives=%llu "
 		"queue_dropped=%llu warm_failures=%llu memory_pause_checks=%llu load_pause_checks=%llu",
 		(unsigned long long)g_opensTotal.load(),
 		(unsigned long long)patched,
@@ -1610,7 +1751,7 @@ static void LogStatsSnapshot()
 		(unsigned long long)(g_warmReadBytes.load() >> 20),
 		(unsigned long long)g_warmReadBytes.load(),
 		(unsigned long long)g_prefetchRequestedBytes.load(),
-		(unsigned long long)g_rawDiscardBytes.load(),
+		(unsigned long long)g_hotSetPrefetchedBytes.load(),
 		(unsigned long long)g_archivesObserved.load(),
 		(unsigned long long)g_archiveQueueDropped.load(),
 		(unsigned long long)g_warmFailures.load(),
@@ -1633,7 +1774,9 @@ static void LogStatsSnapshot()
 	else if (g_prefetchRequestedBytes.load())
 		Log("Cache activity: best-effort mapped prefetch requests accepted; completed bytes/residency are not measured.");
 	else if (!g_settings.enableWarmCache)
-		Log("Cache activity: warming disabled by configuration (Minimal/control profile).");
+		Log(g_settings.hotSetRecord || g_settings.hotSetPrefetch
+			? "Cache activity: legacy archive warmer off; the learned load cache reports on the HotSet lines."
+			: "Cache activity: warming disabled by configuration (Minimal/control profile).");
 	else if (!g_archivesObserved.load() && g_settings.warmCacheOnlyObservedArchives)
 		Log("Cache activity: waiting for successful game archive opens under Data; check SKSE load, archive use and IAT attachment.");
 	else if (!g_warmBytes.load())
@@ -1691,17 +1834,6 @@ static uint64_t WarmMappedPrefetch(HANDLE file, uint64_t fileBytes, uint64_t bud
 
 static uint64_t WarmOneFile(const std::wstring& path, uint64_t maxBytes, bool mapped)
 {
-	if (g_settings.directStorageWarmRead && DirectStorageAvailable()) {
-		// Raw DirectStorage reads do not populate the cache used by Skyrim. Keep
-		// the legacy diagnostic separate, chunked and subject to the same limits.
-		if (!WarmIoAllowed(std::min<uint64_t>(maxBytes, 1ull << 20)))
-			return 0;
-		const uint64_t discarded = DirectStorageReadDiscard(path.c_str(), std::min<uint64_t>(maxBytes, 1ull << 20),
-			g_settings.directStorageTimeoutMs, g_shutdown);
-		g_rawDiscardBytes.fetch_add(discarded, std::memory_order_relaxed);
-		return discarded;
-	}
-
 	std::vector<char> buf(1 << 20); // allocate before owning an OS handle
 	HANDLE h = CreateFileW_orig(
 		path.c_str(),
@@ -1925,8 +2057,6 @@ static void BuildWarmPlan(WarmPlan& plan)
 		threads = tune && drive == HardwareProfile::Drive::NvmeSsd &&
 			g_settings.highEndMode ? 2 : 1;
 	}
-	if (g_settings.directStorageWarmRead && DirectStorageAvailable())
-		threads = 1; // DirectStorage batches internally through one queue.
 	threads = std::max(1u, std::min({ threads, 2u, (unsigned)std::max<size_t>(plan.files.size(), 1) }));
 
 	plan.budgetBytes = budgetMB << 20;
@@ -2018,6 +2148,114 @@ static void WarmCacheCoordinator()
 		g_shutdown.load() ? "shutdown" :
 		g_warmBudgetLeft.load() <= 0 ? "session budget used" : "session deadline");
 	LogStatsSnapshot();
+}
+
+// ---------------------------------------------------------------------------
+// Learned load cache coordinator: prefetch last session's profile at plugin
+// load, then save this session's profile after the first load's window.
+// ---------------------------------------------------------------------------
+static bool HotSetHeadroom(uint64_t upcomingBytes)
+{
+	return HasWarmCacheMemoryHeadroom(upcomingBytes);
+}
+
+static uint64_t HotSetBudgetBytes()
+{
+	uint64_t mb = g_settings.hotSetBudgetMB;
+	if (!mb) {
+		MEMORYSTATUSEX ms{};
+		ms.dwLength = sizeof(ms);
+		const uint64_t totalMB = GlobalMemoryStatusEx(&ms) ? ms.ullTotalPhys >> 20 : 0;
+		mb = std::max<uint64_t>(512, std::min<uint64_t>(totalMB / 8, 4096));
+	}
+	return mb << 20;
+}
+
+static unsigned HotSetThreads()
+{
+	if (g_settings.hotSetThreads)
+		return g_settings.hotSetThreads;
+	if (!g_settings.autoTune)
+		return 2;
+	switch (g_hw.drive) {
+	case HardwareProfile::Drive::NvmeSsd: return 4;
+	case HardwareProfile::Drive::HDD: return 0; // parallel reads would fight the game's own seeks
+	default: return 2;
+	}
+}
+
+static void HotSetCoordinator()
+{
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+	const std::wstring dir = GetSkseOutputDir();
+	const std::wstring path = dir.empty() ? L"" : dir + L"NextGenDiskCache.hotset";
+	std::vector<HotSetEntry> previous;
+	size_t rejected = 0;
+	const bool havePrevious = !path.empty() && HotSetLoad(path, g_dataPath, previous, rejected);
+	if (havePrevious)
+		Log("HotSet: profile has %u files%s", (unsigned)previous.size(),
+			rejected ? " (some invalid lines were ignored)" : "");
+
+	if (g_settings.hotSetPrefetch) {
+		const unsigned threads = HotSetThreads();
+		if (!havePrevious) {
+			Log("HotSet: no profile for this Data folder yet; this session records one and the next launch prefetches it");
+		} else if (!threads) {
+			Log("HotSet: hard disk detected; prefetch skipped so it cannot compete with the game's own reads "
+				"(set iHotSetThreads=1 to force it)");
+		} else {
+			HotSetPrefetchConfig config;
+			config.dataPath = g_dataPath;
+			config.budgetBytes = HotSetBudgetBytes();
+			config.threads = threads;
+			config.lowIoPriority = g_settings.hotSetLowIoPriority;
+			config.deadlineTick = GetTickCount64() + static_cast<ULONGLONG>(g_settings.hotSetMaxSecs) * 1000;
+			config.stop = &g_shutdown;
+			config.memoryHeadroom = HotSetHeadroom;
+			config.open = CreateFileW_orig; // bypasses the hooks, so prefetch is never recorded
+			const ULONGLONG start = GetTickCount64();
+			const HotSetPrefetchResult r = HotSetPrefetch(previous, config);
+			const ULONGLONG ms = std::max<ULONGLONG>(1, GetTickCount64() - start);
+			g_hotSetPrefetchedBytes.store(r.readBytes);
+			Log("HotSet: prefetched %llu MB of %llu MB planned (%u files, stale=%u, failures=%u) in %llu ms "
+				"(%llu MB/s, %u thread%s, cap %llu MB); reason=%s",
+				(unsigned long long)(r.readBytes >> 20), (unsigned long long)(r.plannedBytes >> 20),
+				r.files, r.stale, r.failures, (unsigned long long)ms,
+				(unsigned long long)((r.readBytes >> 20) * 1000 / ms), threads, threads == 1 ? "" : "s",
+				(unsigned long long)(config.budgetBytes >> 20), r.reason);
+		}
+	}
+
+	if (!HotSetRecording())
+		return;
+	if (path.empty()) {
+		HotSetRecordStats ignored;
+		HotSetRecordStop(g_dataPath, ignored);
+		Log("HotSet: no writable profile folder; recording stopped");
+		return;
+	}
+	while (!g_shutdown.load(std::memory_order_relaxed)) {
+		const ULONGLONG done = g_firstLoadDoneTick.load();
+		if (done && GetTickCount64() >= done + static_cast<ULONGLONG>(g_settings.hotSetRecordSecs) * 1000)
+			break;
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+	}
+	if (g_shutdown.load(std::memory_order_relaxed))
+		return;
+	HotSetRecordStats stats;
+	std::vector<HotSetEntry> current = HotSetRecordStop(g_dataPath, stats);
+	const size_t seen = current.size();
+	const std::vector<HotSetEntry> merged =
+		HotSetMerge(std::move(current), previous, g_settings.hotSetMaxAge, HotSetBudgetBytes() * 2);
+	uint64_t bytes = 0;
+	for (const auto& e : merged)
+		bytes += HotSetEntryBytes(e);
+	if (HotSetSave(path, g_dataPath, merged))
+		Log("HotSet: saved profile: %u files (%u read this session, %llu archive reads observed%s), %llu MB to prefetch next launch",
+			(unsigned)merged.size(), (unsigned)seen, (unsigned long long)stats.archiveReads,
+			stats.truncated ? ", recording hit its memory cap" : "", (unsigned long long)(bytes >> 20));
+	else
+		Log("HotSet: could not write the profile; the previous profile is unchanged");
 }
 
 static void DetectSiblingPlugins()
@@ -2198,21 +2436,23 @@ static bool AttachHooks()
 	return AttachHooksIat();
 }
 
-// Retained for completeness. SKSE never hot-unloads plugins and DllMain's
-// DLL_PROCESS_DETACH no longer detaches (Windows reclaims the trampoline at
-// process exit), so this is intentionally uncalled.
-[[maybe_unused]] static void DetachHooks()
+// Read observation for the load cache. Always the executable's import table,
+// whatever iHookScope says: only the game's own archive reads are recorded.
+// Hooks are never removed (another plugin may have chained onto them); once
+// recording stops each call costs one relaxed atomic load.
+static void AttachReadHooks()
 {
-	if (!g_hooksAttached)
-		return;
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	if (g_settings.enableCreateFileA)
-		DetourDetach(&(PVOID&)CreateFileA_orig, CreateFileA_hook);
-	if (g_settings.enableCreateFileW)
-		DetourDetach(&(PVOID&)CreateFileW_orig, CreateFileW_hook);
-	DetourTransactionCommit();
-	g_hooksAttached = false;
+	char foundRead[64] = {};
+	char foundReadEx[64] = {};
+	const bool read = IatHookInstall(nullptr, "ReadFile", ReadFile_hook,
+		foundRead, sizeof(foundRead), reinterpret_cast<void**>(&ReadFile_orig)) != nullptr;
+	const bool readEx = IatHookInstall(nullptr, "ReadFileEx", ReadFileEx_hook,
+		foundReadEx, sizeof(foundReadEx), reinterpret_cast<void**>(&ReadFileEx_orig)) != nullptr;
+	if (read || readEx)
+		Log("HotSet: recording archive reads via the executable's imports (ReadFile=%s ReadFileEx=%s)",
+			read ? foundRead : "not hooked", readEx ? foundReadEx : "not hooked");
+	else
+		Log("HotSet: the executable does not import ReadFile/ReadFileEx; only whole loose files are recorded");
 }
 
 // ---------------------------------------------------------------------------
@@ -2247,23 +2487,35 @@ static void OnSkseMessage(SKSEMessagingInterface::Message* message)
 {
 	if (!message)
 		return;
-	if (message->type == SKSEMessagingInterface::kMessage_DataLoaded)
+	const ULONGLONG now = GetTickCount64();
+	if (message->type == SKSEMessagingInterface::kMessage_DataLoaded) {
 		g_dataLoaded.store(true, std::memory_order_relaxed);
-	else if (message->type == SKSEMessagingInterface::kMessage_PreLoadGame)
+		Log("Timing: game data loaded %.1f s after the plugin loaded (main menu ready)",
+			(now - g_pluginLoadTick) / 1000.0);
+	} else if (message->type == SKSEMessagingInterface::kMessage_PreLoadGame) {
 		g_gameLoading.store(true, std::memory_order_relaxed);
-	else if (message->type == SKSEMessagingInterface::kMessage_PostLoadGame ||
-		message->type == SKSEMessagingInterface::kMessage_NewGame)
+		g_loadStartTick.store(now);
+	} else if (message->type == SKSEMessagingInterface::kMessage_PostLoadGame ||
+		message->type == SKSEMessagingInterface::kMessage_NewGame) {
 		g_gameLoading.store(false, std::memory_order_relaxed);
+		const ULONGLONG start = g_loadStartTick.exchange(0);
+		if (start && message->type == SKSEMessagingInterface::kMessage_PostLoadGame)
+			Log("Timing: save data loaded in %.1f s (SKSE PreLoadGame to PostLoadGame; "
+				"the loading screen can continue while the cell finishes)", (now - start) / 1000.0);
+		ULONGLONG none = 0;
+		g_firstLoadDoneTick.compare_exchange_strong(none, now);
+	}
 }
 
 SKSEAPI bool SKSEPlugin_Load(const SKSEInterface* skse) try
 {
+	g_pluginLoadTick = GetTickCount64();
 	LoadSettings();
 	OpenLog();
 	ResolveDynamicApis();
 	g_dataPath = GetGameDataPath();
 	g_observedArchives.reserve(g_settings.warmCacheMaxFiles);
-	Log("NextGen Disk Cache " PLUGIN_VERSION_STRING " - active bounded archive cache");
+	Log("NextGen Disk Cache " PLUGIN_VERSION_STRING " - learned load cache");
 	bool listening = false;
 	if (skse && skse->QueryInterface && skse->GetPluginHandle) {
 		auto* messaging = static_cast<SKSEMessagingInterface*>(skse->QueryInterface(kInterface_Messaging));
@@ -2273,15 +2525,26 @@ SKSEAPI bool SKSEPlugin_Load(const SKSEInterface* skse) try
 	if (!listening) {
 		Log("SKSE messaging unavailable; warmer uses delay from plugin load and cannot pause for save loading");
 		g_dataLoaded.store(true, std::memory_order_relaxed);
-	} else
+	} else if (g_settings.enableWarmCache)
 		Log("WarmCache: waiting for SKSE DataLoaded; save-load messages pause background reads");
 	if (!ValidateFilePolicy()) {
 		g_settings.enableFileCacheHooks = false;
 		Log("ERROR: internal file-policy self-test failed; hooks disabled");
 	}
+	// Recording needs the open hooks; without SKSE messages it could never tell
+	// when the first save load is done, so it stays off rather than guess.
+	const bool record = g_settings.hotSetRecord && g_settings.enableFileCacheHooks && listening && !g_dataPath.empty();
+	if (record)
+		HotSetRecordStart();
 	if (!AttachHooks()) {
 		g_hookAttachFailed = true;
 		Log("WARNING: CreateFile hooks did not attach - running detection/hints only");
+		if (record) {
+			HotSetRecordStats ignored;
+			HotSetRecordStop(g_dataPath, ignored);
+		}
+	} else if (record) {
+		AttachReadHooks();
 	}
 
 	DetectSiblingPlugins();
@@ -2294,9 +2557,9 @@ SKSEAPI bool SKSEPlugin_Load(const SKSEInterface* skse) try
 		DetectOs(g_hw);
 		LogHardwareProfile(g_hw);
 		ApplyFastCorePreference(g_hw);
-	} else if (g_settings.enableWarmCache && g_settings.autoTune) {
+	} else if ((g_settings.enableWarmCache || g_settings.hotSetPrefetch) && g_settings.autoTune) {
 		DetectGameDrive(g_hw); // no CPU/SMBIOS/GPU enumeration needed for I/O caps
-		Log("WarmCache drive-only tuning: %s; full hardware profiling disabled", DriveName(g_hw.drive));
+		Log("Drive-only tuning: %s; full hardware profiling disabled", DriveName(g_hw.drive));
 	} else
 		Log("Hardware profile disabled (bHardwareProfile=0)");
 	// Manual classification applies to drive-only tuning as well as the legacy profiler.
@@ -2309,24 +2572,21 @@ SKSEAPI bool SKSEPlugin_Load(const SKSEInterface* skse) try
 
 	ApplyProcessHints();
 
-	if (g_settings.directStorageProbe) {
-		const auto ds = DirectStorageInitialize(
-			g_settings.directStorageQueueCapacity, g_settings.directStorageBatchMB,
-			g_settings.directStorageWarmRead);
-		if (ds.memoryQueueCreated)
-			Log("DirectStorage: runtime ready at %ls; low-priority system-memory queue created [EXPERIMENTAL RAW READ ENABLED]", ds.runtimePath);
-		else if (ds.factoryCreated && !g_settings.directStorageWarmRead)
-			Log("DirectStorage: runtime validated at %ls; queue not created because raw reads are disabled", ds.runtimePath);
-		else if (ds.runtimeDllPresent)
-			Log("DirectStorage: runtime found at %ls but requested initialization failed hr=0x%08X%s",
-				ds.runtimePath, (unsigned)ds.result,
-				ds.coreDllPresent ? "" : " (dstoragecore.dll is not loaded - it must sit beside dstorage.dll)");
-		else
-			Log("DirectStorage: runtime not found; PrefetchVirtualMemory remains active");
-	}
+	// The load cache starts now, before the game reads its plugins and archives.
+	if (g_settings.hotSetPrefetch || HotSetRecording()) {
+		try {
+			std::thread([] {
+				try { HotSetCoordinator(); }
+				catch (...) { Log("HotSet: stopped after a resource error; game file handles are unchanged"); }
+			}).detach();
+		} catch (...) {
+			Log("HotSet: worker could not start; load cache disabled for this session");
+		}
+	} else
+		Log("HotSet: disabled by configuration (Minimal/control)");
 
 	if (!g_settings.enableWarmCache)
-		Log("WarmCache: disabled by configuration (Minimal/control)");
+		Log("WarmCache: legacy archive warmer disabled by configuration");
 
 	bool expectedWarm = false;
 	if (g_settings.enableWarmCache &&

@@ -1,0 +1,11 @@
+2.3.0
+
+- New learned load cache: each session records which game files and archive parts Skyrim reads until 90 seconds after your first save load.
+- The next launch reads exactly that data into RAM in parallel as soon as SKSE loads, before the game asks for it. The first launch after installing only records.
+- Changed or updated mod files are skipped automatically; files you stop using drop out after four launches.
+- Saves, cosaves, writes and anything outside Data are never recorded or read. Game requests are only observed, never changed.
+- The log now shows how long the data load and each save load took, so you can compare Safe and Minimal after a restart.
+- Safe now uses the load cache instead of the old archive warmer, which only re-read archive headers after the save had already loaded.
+- Experimental keeps the old warmer and wider hooks on top of the load cache. Minimal is the everything-off comparison.
+- Removed DirectStorage support: it bypasses the Windows file cache Skyrim reads from, so it could never speed up loading.
+- Reinstall the full FOMOD to update.
