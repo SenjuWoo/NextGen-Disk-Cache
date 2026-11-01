@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/SenjuWoo/NextGen-Disk-Cache/actions/workflows/build-release.yml"><img src="https://github.com/SenjuWoo/NextGen-Disk-Cache/actions/workflows/build-release.yml/badge.svg" alt="Build"></a>
   <a href="LICENSE.txt"><img src="https://img.shields.io/badge/license-ISC-e8b86d?labelColor=0d0f11" alt="ISC License"></a>
-  <a href="https://github.com/SenjuWoo/NextGen-Disk-Cache/releases/tag/v2.3.0"><img src="https://img.shields.io/badge/release-v2.3.0-e8b86d?labelColor=0d0f11" alt="v2.3.0"></a>
+  <a href="https://github.com/SenjuWoo/NextGen-Disk-Cache/releases/latest"><img src="https://img.shields.io/github/v/release/SenjuWoo/NextGen-Disk-Cache?label=release&color=e8b86d" alt="latest release"></a>
   <img src="https://img.shields.io/badge/SKSE-SE%20%2F%20AE-8f9aa6?labelColor=0d0f11" alt="SKSE SE/AE">
 </p>
 
