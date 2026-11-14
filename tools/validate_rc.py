@@ -7,12 +7,14 @@ import ctypes
 import hashlib
 import pathlib
 import py_compile
+import re
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "2.3.0"
+# VERSION.txt is the single version source; every other copy is checked against it.
+VERSION = (ROOT / "VERSION.txt").read_text(encoding="utf-8").strip()
 PROFILES = ["SafeDefault", "Minimal", "ExperimentalWarmCache"]
 PUBLIC_DOCS = ["README.md", "CHANGELOG.txt", "PACKAGE-NOTICE.txt", "LICENSE.txt",
                "LICENSE.Archost-DiskCacheEnabler.txt", "LICENSE.detours.txt",
@@ -78,6 +80,8 @@ def validate_archive(path: pathlib.Path) -> None:
     metadata = VersionData.in_dll(library, "SKSEPlugin_Version")
     major, minor, patch = map(int, VERSION.split("."))
     require(metadata.pluginVersion == ((major << 16) | (minor << 8) | patch), "DLL export version mismatch")
+    dll_bytes = (ROOT / "package/SKSE/Plugins/NextGenDiskCache.dll").read_bytes()
+    require(VERSION.encode("utf-16-le") in dll_bytes, "DLL version resource does not name VERSION.txt's version")
     print(f"ARCHIVE PASS: {len(members)} files, SHA256 {hashlib.sha256(path.read_bytes()).hexdigest()}")
 
 
@@ -85,9 +89,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--archive", type=pathlib.Path)
     args = parser.parse_args()
-    require((ROOT / "VERSION.txt").read_text(encoding="utf-8").strip() == VERSION,
-            "VERSION.txt mismatch")
+    require(re.fullmatch(r"\d+\.\d+\.\d+", VERSION) is not None,
+            f"VERSION.txt must contain major.minor.patch, found {VERSION!r}")
     required = [
+        "VERSION.txt",
+        "src/version.rc.in",
         "src/main.cpp",
         "src/HotSet.h",
         "src/HotSet.cpp",
@@ -141,6 +147,9 @@ def main() -> int:
 
     sections = ["FileCache", "Process", "Hardware", "HotSet", "WarmCache", "Log"]
     for profile in PROFILES:
+        header = (ROOT / f"profiles/{profile}/NextGenDiskCache.ini").read_text(encoding="utf-8").splitlines()[0]
+        require(header == f"; NextGen Disk Cache {VERSION} - {profile}",
+                f"{profile}: INI header must name version {VERSION}")
         cfg = read_cfg(profile)
         for section in sections:
             require(cfg.has_section(section), f"{profile}: missing [{section}]")
@@ -213,7 +222,9 @@ def main() -> int:
 
     main_cpp = (ROOT / "src/main.cpp").read_text(encoding="utf-8")
     for token in [
-        f'PLUGIN_VERSION_STRING "{VERSION}"',
+        # The version comes from VERSION.txt through CMake, never a literal.
+        "#define PLUGIN_VERSION_STRING NGDC_VERSION_STRING",
+        "unsigned(NGDC_VERSION_MAJOR) << 16",
         # Load-cache recording observes the executable only and never writes a
         # file position (SetFilePointerEx would race a game thread's own seek).
         "IsRecordableOpen(flags, desiredAccess, creationDisposition)",
@@ -287,7 +298,11 @@ def main() -> int:
             "IAT must be the default path, Detours the explicit opt-in")
 
     cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    require(f"VERSION {VERSION}" in cmake, "CMake version mismatch")
+    require('file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" NGDC_VERSION' in cmake and
+            "project(NextGenDiskCache VERSION ${NGDC_VERSION}" in cmake,
+            "CMake must take the version from VERSION.txt")
+    require(cmake.count("${NGDC_VERSION_DEFINES}") >= 2 and "version.rc" in cmake,
+            "DLL and policy checks must both receive the VERSION.txt defines; DLL needs its version resource")
     require("HotSet.cpp" in cmake and "directstorage" not in cmake.lower(), "HotSet must be built; DirectStorage removed")
     for mode in [" hotset ", " hotsetmenu ", " hotsetpressure)"]:
         require(mode in cmake, f"load-cache host test must run:{mode.rstrip(')')}")
@@ -305,7 +320,8 @@ def main() -> int:
     workflow = (ROOT / ".github/workflows/build-release.yml").read_text(encoding="utf-8")
     require("nuget" not in workflow.lower(), "CI no longer downloads the DirectStorage SDK")
     for token in ["windows-2022",
-                  f"NextGenDiskCache-{VERSION}-FOMOD.zip",
+                  "NGDC_VERSION=",
+                  "NextGenDiskCache-${{ env.NGDC_VERSION }}-FOMOD.zip",
                   "build/symbols/NextGenDiskCache.pdb",
                   "python tools/validate_rc.py"]:
         require(token in workflow, f"workflow missing {token}")

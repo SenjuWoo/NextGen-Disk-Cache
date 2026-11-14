@@ -1,6 +1,7 @@
-# Build NextGenDiskCache 2.3.0 (DLL) into package\SKSE\Plugins.
+# Build NextGenDiskCache (DLL, version from VERSION.txt) into package\SKSE\Plugins.
 # Robust across Visual Studio 2019/2022/2026: the CMake generator is derived
-# from whatever vswhere reports. No downloads: every dependency is in deps\.
+# from whatever vswhere reports; a newer major lets CMake pick its default.
+# No downloads: every dependency is in deps\.
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
@@ -21,14 +22,26 @@ switch ($vsMajor) {
     18 { $generator = "Visual Studio 18 2026" }
     17 { $generator = "Visual Studio 17 2022" }
     16 { $generator = "Visual Studio 16 2019" }
-    default { throw "Unsupported Visual Studio major version: $vsMajor ($vsVer)" }
+    default { $generator = $null }
 }
-Write-Host "Using $generator (VS $vsVer at $vs)"
+if ($generator) {
+    Write-Host "Using $generator (VS $vsVer at $vs)"
+    $generatorArg = "-G `"$generator`""
+} else {
+    # A Visual Studio newer than this script: CMake's default generator on Windows
+    # is the newest Visual Studio it knows, which is the right one.
+    Write-Warning "Visual Studio $vsMajor ($vsVer) is newer than this script knows; letting CMake choose the generator"
+    $generatorArg = ""
+}
 $vsDev = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+# VsDevCmd calls vswhere by name; without its folder on PATH it prints a
+# spurious "'vswhere.exe' is not recognized" error.
+$vswhereDir = Split-Path -Parent $vswhere
 
 $cmd = @"
+set "PATH=$vswhereDir;%PATH%"
 call "$vsDev" -arch=amd64 -host_arch=amd64 >nul
-cmake -S . -B build -G "$generator" -A x64
+cmake -S . -B build $generatorArg -A x64
 if errorlevel 1 exit /b 1
 cmake --build build --config Release --parallel
 if errorlevel 1 exit /b 1

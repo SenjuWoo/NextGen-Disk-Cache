@@ -15,6 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Read version
+        shell: pwsh
+        run: '"NGDC_VERSION=$((Get-Content VERSION.txt -Raw).Trim())" >> $env:GITHUB_ENV'
+
       - name: Validate source bundle
         run: python tools/validate_rc.py
 
@@ -34,14 +38,15 @@ jobs:
       - name: Upload FOMOD artifact
         uses: actions/upload-artifact@v7
         with:
-          name: NextGenDiskCache-2.3.0-FOMOD
+          name: NextGenDiskCache-${{ env.NGDC_VERSION }}-FOMOD
           path: |
-            dist/NextGenDiskCache-2.3.0-FOMOD.zip
-            dist/NextGenDiskCache-2.3.0-SHA256.txt
+            dist/NextGenDiskCache-${{ env.NGDC_VERSION }}-FOMOD.zip
+            dist/NextGenDiskCache-${{ env.NGDC_VERSION }}-SHA256.txt
+          if-no-files-found: error
 
       - name: Upload symbols separately
         uses: actions/upload-artifact@v7
         with:
-          name: NextGenDiskCache-2.3.0-symbols
+          name: NextGenDiskCache-${{ env.NGDC_VERSION }}-symbols
           path: build/symbols/NextGenDiskCache.pdb
           if-no-files-found: warn

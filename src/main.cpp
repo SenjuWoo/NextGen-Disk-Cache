@@ -93,8 +93,14 @@
 // Nexus uploads (1.1.2 / 1.1.3) used a separate numbering scheme from the git
 // tags (1.3.0 / 1.4.x), which made user bug reports impossible to map onto a
 // commit. From here the DLL, the tag, and the Nexus file all read the same.
-#define PLUGIN_VERSION ((2u << 16) | (3u << 8) | 0u) // 2.3.0
-#define PLUGIN_VERSION_STRING "2.3.0"
+// Since 2.3.1 the numbers come from VERSION.txt through CMake.
+#if !defined(NGDC_VERSION_MAJOR) || !defined(NGDC_VERSION_MINOR) || !defined(NGDC_VERSION_PATCH) || \
+	!defined(NGDC_VERSION_STRING)
+#error "Build through CMake: the plugin version is read from VERSION.txt"
+#endif
+#define PLUGIN_VERSION ((unsigned(NGDC_VERSION_MAJOR) << 16) | (unsigned(NGDC_VERSION_MINOR) << 8) | \
+	unsigned(NGDC_VERSION_PATCH))
+#define PLUGIN_VERSION_STRING NGDC_VERSION_STRING
 
 // ---------------------------------------------------------------------------
 // Settings (INI)
@@ -200,7 +206,6 @@ static std::atomic<uint64_t> g_noBufferingStripped{0};
 static std::atomic<uint64_t> g_opensSafetyGated{0};
 static std::atomic<bool> g_warmStarted{false};
 static HMODULE g_selfModule = nullptr;
-static bool g_hookAttachFailed = false;
 static std::atomic<bool> g_dataLoaded{false};
 static std::atomic<bool> g_gameLoading{false};
 static std::atomic<bool> g_warmFinished{false};
@@ -2352,8 +2357,6 @@ static void DetectSiblingPlugins()
 // ---------------------------------------------------------------------------
 // Detours attach
 // ---------------------------------------------------------------------------
-static bool g_hooksAttached = false;
-
 // Narrow scope: rewrite only the main executable's import table, so file I/O
 // performed by unrelated SKSE plugins never reaches this plugin's code.
 static bool AttachHooksIat()
@@ -2386,7 +2389,6 @@ static bool AttachHooksIat()
 		return false;
 	}
 
-	g_hooksAttached = true;
 	Log("CreateFile hooks attached via IAT of the main executable "
 		"(A=%s W=%s) - other modules are not intercepted",
 		foundA[0] ? foundA : "not hooked", foundW[0] ? foundW : "not hooked");
@@ -2459,7 +2461,6 @@ static bool AttachHooksDetours() try
 		Log("DetourTransactionCommit failed: %ld", err);
 		return false;
 	}
-	g_hooksAttached = true;
 	Log("CreateFile hooks attached PROCESS-WIDE via Detours (A=%d W=%d) - "
 		"file opens from every module in the process pass through this plugin",
 		(int)g_settings.enableCreateFileA, (int)g_settings.enableCreateFileW);
@@ -2590,7 +2591,6 @@ SKSEAPI bool SKSEPlugin_Load(const SKSEInterface* skse) try
 	if (record)
 		HotSetRecordStart();
 	if (!AttachHooks()) {
-		g_hookAttachFailed = true;
 		Log("WARNING: CreateFile hooks did not attach - running detection/hints only");
 		if (record) {
 			HotSetRecordStats ignored;

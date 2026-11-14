@@ -110,16 +110,3 @@ void* IatHookInstall(HMODULE module, const char* funcName, void* replacement,
 		return nullptr;
 	return previous;
 }
-
-bool IatHookRemove(HMODULE module, const char* funcName, void* original)
-{
-	if (!funcName || !original)
-		return false;
-	if (!module)
-		module = GetModuleHandleW(nullptr);
-
-	PIMAGE_THUNK_DATA slot = FindIatSlot(module, funcName, nullptr, 0);
-	if (!slot)
-		return false;
-	return WriteSlot(slot, reinterpret_cast<ULONGLONG>(original));
-}

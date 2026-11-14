@@ -1,13 +1,32 @@
 cmake_minimum_required(VERSION 3.21)
-project(NextGenDiskCache VERSION 2.3.0 LANGUAGES CXX)
+
+# VERSION.txt is the only place the version is written. The DLL's SKSE metadata,
+# its version resource, the packager and CI all read it from there.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt" NGDC_VERSION LIMIT_COUNT 1)
+string(STRIP "${NGDC_VERSION}" NGDC_VERSION)
+if(NOT NGDC_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  message(FATAL_ERROR "VERSION.txt must contain major.minor.patch, found '${NGDC_VERSION}'")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION.txt")
+
+project(NextGenDiskCache VERSION ${NGDC_VERSION} LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(NGDC_VERSION_DEFINES
+  NGDC_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+  NGDC_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+  NGDC_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+  NGDC_VERSION_STRING="${PROJECT_VERSION}"
+)
+configure_file(src/version.rc.in "${CMAKE_BINARY_DIR}/generated/version.rc" @ONLY)
 
 add_library(NextGenDiskCache SHARED
   src/main.cpp
   src/HotSet.cpp
   src/IatHook.cpp
+  "${CMAKE_BINARY_DIR}/generated/version.rc"
 )
 
 include(CTest)
@@ -16,7 +35,8 @@ if(BUILD_TESTING)
   target_include_directories(CachePolicyChecks PRIVATE deps/include)
   target_link_directories(CachePolicyChecks PRIVATE deps/libs/detours)
   target_link_libraries(CachePolicyChecks PRIVATE detours.lib setupapi.lib cfgmgr32.lib)
-  target_compile_definitions(CachePolicyChecks PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(CachePolicyChecks PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+    ${NGDC_VERSION_DEFINES})
   add_test(NAME cache_policy COMMAND CachePolicyChecks)
 
   add_library(CacheOtherModule SHARED tests/other_module.cpp)
@@ -50,6 +70,7 @@ target_compile_definitions(NextGenDiskCache PRIVATE
   WIN32_LEAN_AND_MEAN
   NOMINMAX
   _CRT_SECURE_NO_WARNINGS
+  ${NGDC_VERSION_DEFINES}
 )
 
 if(MSVC)
