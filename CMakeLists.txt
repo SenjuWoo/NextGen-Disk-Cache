@@ -23,7 +23,7 @@ if(BUILD_TESTING)
   add_executable(CacheHost tests/cache_host.cpp src/IatHook.cpp)
   target_include_directories(CacheHost PRIVATE src deps/include)
   target_compile_definitions(CacheHost PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
-  foreach(mode observed mapped strided pressure memfail minimal directory late pacing threads inflight wide hotset)
+  foreach(mode observed mapped strided pressure memfail minimal directory late pacing threads inflight wide hotset hotsetmenu hotsetpressure)
     add_test(NAME host_${mode} COMMAND CacheHost
       "${CMAKE_SOURCE_DIR}/package/SKSE/Plugins/NextGenDiskCache.dll"
       "$<TARGET_FILE:CacheOtherModule>" ${mode})

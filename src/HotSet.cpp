@@ -166,6 +166,36 @@ void StopAfterResourceError() noexcept
 	g_recording.store(false, std::memory_order_relaxed);
 }
 
+// Turns recorder state into profile entries stamped with the current size and
+// last-write time. Does file-system queries, so callers run it outside g_recLock.
+std::vector<HotSetEntry> ToEntries(std::vector<Recorded> recorded, const std::wstring& dataPath)
+{
+	std::vector<HotSetEntry> out;
+	out.reserve(recorded.size());
+	for (auto& r : recorded) {
+		// An archive opened but never read through the executable has no known ranges;
+		// reading all of it would be a guess, so it is left out.
+		if (r.archive && r.chunks.empty())
+			continue;
+		HotSetEntry e;
+		if (!FileStamp(dataPath + L"\\" + r.rel, e.size, e.mtime) || !e.size ||
+			(!r.archive && e.size > kMaxWholeFileBytes) || !HotSetSafeRelativePath(r.rel))
+			continue;
+		e.relPath = std::move(r.rel);
+		e.firstUseMs = r.firstUseMs;
+		e.archive = r.archive;
+		e.chunks = std::move(r.chunks);
+		if (e.archive) {
+			HotSetCoalesce(e.chunks, kRecordMergeGapChunks);
+			ClampChunks(e.chunks, e.size);
+			if (e.chunks.empty())
+				continue;
+		}
+		out.push_back(std::move(e));
+	}
+	return out;
+}
+
 } // namespace
 
 // --- profile -----------------------------------------------------------------
@@ -456,30 +486,21 @@ std::vector<HotSetEntry> HotSetRecordStop(const std::wstring& dataPath, HotSetRe
 		stats.archiveReads = g_recArchiveReads;
 		stats.truncated = g_recTruncated;
 	}
-	std::vector<HotSetEntry> out;
-	out.reserve(recorded.size());
-	for (auto& r : recorded) {
-		// An archive opened but never read through the executable has no known ranges;
-		// reading all of it would be a guess, so it is left out.
-		if (r.archive && r.chunks.empty())
-			continue;
-		HotSetEntry e;
-		if (!FileStamp(dataPath + L"\\" + r.rel, e.size, e.mtime) || !e.size ||
-			(!r.archive && e.size > kMaxWholeFileBytes) || !HotSetSafeRelativePath(r.rel))
-			continue;
-		e.relPath = std::move(r.rel);
-		e.firstUseMs = r.firstUseMs;
-		e.archive = r.archive;
-		e.chunks = std::move(r.chunks);
-		if (e.archive) {
-			HotSetCoalesce(e.chunks, kRecordMergeGapChunks);
-			ClampChunks(e.chunks, e.size);
-			if (e.chunks.empty())
-				continue;
-		}
-		out.push_back(std::move(e));
+	return ToEntries(std::move(recorded), dataPath);
+}
+
+std::vector<HotSetEntry> HotSetRecordSnapshot(const std::wstring& dataPath, HotSetRecordStats& stats)
+{
+	std::vector<Recorded> recorded;
+	{
+		// Shared: other lookups continue; a recording write waits only for this copy.
+		std::shared_lock<std::shared_mutex> lock(g_recLock);
+		recorded = g_rec;
+		stats.files = recorded.size();
+		stats.archiveReads = g_recArchiveReads;
+		stats.truncated = g_recTruncated;
 	}
-	return out;
+	return ToEntries(std::move(recorded), dataPath);
 }
 
 // --- prefetch ----------------------------------------------------------------

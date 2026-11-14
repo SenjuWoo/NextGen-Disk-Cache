@@ -248,6 +248,11 @@ def main() -> int:
         "kMessage_DataLoaded",
         "kMessage_PreLoadGame",
         "SetLastError(resultError)",
+        # 2.3.1: a session that ends before the recording window closes keeps its
+        # recording, and the load cache's RAM stop cannot be switched off.
+        'HotSetCheckpoint(path, previous, "at the main menu")',
+        "HotSetRecordSnapshot(g_dataPath, stats)",
+        "return HasMemoryHeadroom(upcomingBytes);",
     ]:
         require(token in main_cpp, f"main.cpp missing safety token: {token}")
     require('".ini", ".json"' in main_cpp, "known assets list unexpectedly missing")
@@ -284,7 +289,8 @@ def main() -> int:
     cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     require(f"VERSION {VERSION}" in cmake, "CMake version mismatch")
     require("HotSet.cpp" in cmake and "directstorage" not in cmake.lower(), "HotSet must be built; DirectStorage removed")
-    require(" hotset)" in cmake, "two-session load-cache host test must run")
+    for mode in [" hotset ", " hotsetmenu ", " hotsetpressure)"]:
+        require(mode in cmake, f"load-cache host test must run:{mode.rstrip(')')}")
     require("IatHook.cpp" in cmake, "IAT hook not built")
     require("cache_policy.cpp" in cmake and "cache_host.cpp" in cmake,
             "production regression checks must be built")

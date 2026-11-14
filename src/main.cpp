@@ -1557,10 +1557,9 @@ static uint64_t AutomaticMemoryReserveMB(uint64_t totalMB)
     return 1024;
 }
 
-static bool HasWarmCacheMemoryHeadroom(uint64_t upcomingBytes = 0)
+// True while the next read still leaves the RAM reserve free.
+static bool HasMemoryHeadroom(uint64_t upcomingBytes)
 {
-    if (!g_settings.stopWarmCacheOnMemoryPressure)
-        return true;
     MEMORYSTATUSEX ms{};
     ms.dwLength = sizeof(ms);
     if (!GlobalMemoryStatusEx(&ms))
@@ -1569,6 +1568,12 @@ static bool HasWarmCacheMemoryHeadroom(uint64_t upcomingBytes = 0)
     const uint64_t availMB = ms.ullAvailPhys >> 20;
     return ms.dwMemoryLoad < 90 && availMB > AutomaticMemoryReserveMB(totalMB) +
         ((upcomingBytes + (1ull << 20) - 1) >> 20);
+}
+
+// The legacy warmer's guard can be switched off (bStopWarmCacheOnMemoryPressure=0).
+static bool HasWarmCacheMemoryHeadroom(uint64_t upcomingBytes = 0)
+{
+    return !g_settings.stopWarmCacheOnMemoryPressure || HasMemoryHeadroom(upcomingBytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -2154,9 +2159,11 @@ static void WarmCacheCoordinator()
 // Learned load cache coordinator: prefetch last session's profile at plugin
 // load, then save this session's profile after the first load's window.
 // ---------------------------------------------------------------------------
+// Always enforced for the load cache: it reads gigabytes at start-up, so the
+// legacy warmer's opt-out key (bStopWarmCacheOnMemoryPressure) does not apply.
 static bool HotSetHeadroom(uint64_t upcomingBytes)
 {
-	return HasWarmCacheMemoryHeadroom(upcomingBytes);
+	return HasMemoryHeadroom(upcomingBytes);
 }
 
 static uint64_t HotSetBudgetBytes()
@@ -2181,6 +2188,45 @@ static unsigned HotSetThreads()
 	case HardwareProfile::Drive::NvmeSsd: return 4;
 	case HardwareProfile::Drive::HDD: return 0; // parallel reads would fight the game's own seeks
 	default: return 2;
+	}
+}
+
+// Merges this session's entries with the profile loaded at start-up and writes it.
+// Every save merges with that same start-up profile, so checkpoints followed by the
+// final save age an unread file once per session, not once per save.
+static bool HotSetSaveMerged(const std::wstring& path, std::vector<HotSetEntry> current,
+	const std::vector<HotSetEntry>& previous, size_t& files, uint64_t& bytes)
+{
+	const std::vector<HotSetEntry> merged =
+		HotSetMerge(std::move(current), previous, g_settings.hotSetMaxAge, HotSetBudgetBytes() * 2);
+	files = merged.size();
+	bytes = 0;
+	for (const auto& e : merged)
+		bytes += HotSetEntryBytes(e);
+	return HotSetSave(path, g_dataPath, merged);
+}
+
+// A session can end before the recording window closes (quit at the main menu,
+// a crash, a short test launch), and DllMain cannot write files at exit. Without
+// checkpoints such a session records for minutes and keeps nothing.
+static void HotSetCheckpoint(const std::wstring& path, const std::vector<HotSetEntry>& previous, const char* when)
+{
+	try {
+		HotSetRecordStats stats;
+		std::vector<HotSetEntry> current = HotSetRecordSnapshot(g_dataPath, stats);
+		const size_t seen = current.size();
+		size_t files = 0;
+		uint64_t bytes = 0;
+		if (!seen)
+			Log("HotSet: checkpoint %s skipped; nothing under Data has been read yet", when);
+		else if (HotSetSaveMerged(path, std::move(current), previous, files, bytes))
+			Log("HotSet: checkpoint saved %s: %u files (%u read so far, %llu archive reads), %llu MB to prefetch next launch",
+				when, (unsigned)files, (unsigned)seen, (unsigned long long)stats.archiveReads,
+				(unsigned long long)(bytes >> 20));
+		else
+			Log("HotSet: checkpoint %s could not be written; recording continues", when);
+	} catch (...) {
+		Log("HotSet: checkpoint %s skipped after a resource error; recording continues", when);
 	}
 }
 
@@ -2234,10 +2280,20 @@ static void HotSetCoordinator()
 		Log("HotSet: no writable profile folder; recording stopped");
 		return;
 	}
+	bool menuSaved = false, loadSaved = false;
 	while (!g_shutdown.load(std::memory_order_relaxed)) {
 		const ULONGLONG done = g_firstLoadDoneTick.load();
 		if (done && GetTickCount64() >= done + static_cast<ULONGLONG>(g_settings.hotSetRecordSecs) * 1000)
 			break;
+		// Start-up (plugins and archives up to the main menu) is the bulk of the
+		// profile, so it is kept as soon as the main menu is reached.
+		if (!menuSaved && g_dataLoaded.load(std::memory_order_relaxed)) {
+			menuSaved = true;
+			HotSetCheckpoint(path, previous, "at the main menu");
+		} else if (done && !loadSaved) {
+			loadSaved = true;
+			HotSetCheckpoint(path, previous, "after the first save load");
+		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(250));
 	}
 	if (g_shutdown.load(std::memory_order_relaxed))
@@ -2245,17 +2301,14 @@ static void HotSetCoordinator()
 	HotSetRecordStats stats;
 	std::vector<HotSetEntry> current = HotSetRecordStop(g_dataPath, stats);
 	const size_t seen = current.size();
-	const std::vector<HotSetEntry> merged =
-		HotSetMerge(std::move(current), previous, g_settings.hotSetMaxAge, HotSetBudgetBytes() * 2);
+	size_t files = 0;
 	uint64_t bytes = 0;
-	for (const auto& e : merged)
-		bytes += HotSetEntryBytes(e);
-	if (HotSetSave(path, g_dataPath, merged))
+	if (HotSetSaveMerged(path, std::move(current), previous, files, bytes))
 		Log("HotSet: saved profile: %u files (%u read this session, %llu archive reads observed%s), %llu MB to prefetch next launch",
-			(unsigned)merged.size(), (unsigned)seen, (unsigned long long)stats.archiveReads,
+			(unsigned)files, (unsigned)seen, (unsigned long long)stats.archiveReads,
 			stats.truncated ? ", recording hit its memory cap" : "", (unsigned long long)(bytes >> 20));
 	else
-		Log("HotSet: could not write the profile; the previous profile is unchanged");
+		Log("HotSet: could not write the profile; the last saved profile is unchanged");
 }
 
 static void DetectSiblingPlugins()
