@@ -63,6 +63,10 @@ struct HotSetRecordStats {
 };
 // Stops recording and returns what was seen, stamped with current size/mtime.
 std::vector<HotSetEntry> HotSetRecordStop(const std::wstring& dataPath, HotSetRecordStats& stats);
+// Same result without stopping: a checkpoint, so a session that ends before the
+// recording window closes still leaves a profile. Game threads wait only for the
+// in-memory copy, never for the size/mtime stamping that follows it.
+std::vector<HotSetEntry> HotSetRecordSnapshot(const std::wstring& dataPath, HotSetRecordStats& stats);
 
 // --- prefetch ----------------------------------------------------------------
 using HotSetOpenFn = HANDLE(WINAPI*)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);

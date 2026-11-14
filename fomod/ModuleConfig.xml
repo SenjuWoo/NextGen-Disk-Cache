@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
-  <moduleName>NextGen Disk Cache 2.3.0</moduleName>
+  <moduleName>NextGen Disk Cache 2.3.1</moduleName>
   <requiredInstallFiles>
     <folder source="Core" destination="" priority="0" />
   </requiredInstallFiles>
@@ -10,7 +10,7 @@
         <group name="Safe or Experimental" type="SelectExactlyOne">
           <plugins order="Explicit">
             <plugin name="Safe (Recommended)">
-              <description>Learned load cache. Each session records which game files and which parts of each BSA/BA2 archive Skyrim reads, from start-up until 90 seconds after your first save load. The next launch reads exactly that data back into the Windows file cache in parallel as soon as SKSE loads the plugin, so the main menu and the first save load are served from RAM instead of waiting on the disk one request at a time. The first launch only records.
+              <description>Learned load cache. Each session records which game files and which parts of each BSA/BA2 archive Skyrim reads, from start-up until 90 seconds after your first save load. The next launch reads exactly that data back into the Windows file cache in parallel as soon as SKSE loads the plugin, so the main menu and the first save load are served from RAM instead of waiting on the disk one request at a time. The first launch only records; what it recorded is saved at the main menu, after the first save load and when recording ends, so a short session still counts.
 
 Recording observes the game's own requests through SkyrimSE.exe's imports and never changes them. Saves, cosaves, writes and files outside Data are never recorded or read. Files changed since they were recorded are skipped. Prefetch size is automatic (1/8 of RAM, 512-4096 MB), stops at the RAM reserve and after 120 seconds, and is skipped on hard disks.
 

@@ -2,7 +2,7 @@
 <fomod>
   <Name>NextGen Disk Cache</Name>
   <Author>Archost; derivative maintained by SenjuWoo</Author>
-  <Version>2.3.0</Version>
+  <Version>2.3.1</Version>
   <Website>https://github.com/SenjuWoo/NextGen-Disk-Cache</Website>
   <Description>An SKSE64 load cache. It learns which game files and archive ranges Skyrim reads at start-up and during the first save load, then reads exactly that data into the Windows file cache in parallel at the next launch. Recording never changes a game request; saves and writes are never touched. Includes Safe, Minimal and Experimental profiles and logs load timings so you can measure the gain.</Description>
 </fomod>

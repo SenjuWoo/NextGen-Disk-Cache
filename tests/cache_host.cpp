@@ -144,8 +144,14 @@ static std::string WaitForLog(const fs::path& logPath, const char* needle)
 	return log;
 }
 
-static int HotSetPhase(const fs::path& root, const std::wstring& phase, const fs::path& sourceDll)
+// Modes: "hotset" plays a full session (record until the window after the first
+// save load closes, then prefetch). "hotsetmenu" quits at the main menu: the
+// profile must already be on disk from the main-menu checkpoint.
+// "hotsetpressure" prefetches with no RAM headroom while the legacy warmer's
+// own memory guard is switched off: the load cache must still stop.
+static int HotSetPhase(const fs::path& root, const std::wstring& phase, const fs::path& sourceDll, const std::wstring& mode)
 {
+	const bool menuOnly = mode == L"hotsetmenu", noHeadroom = mode == L"hotsetpressure";
 	const fs::path data = root / "Data", plugins = data / "SKSE" / "Plugins";
 	const fs::path bsa = data / "hot.bsa", nif = data / "meshes" / "hot.nif", esp = data / "hot.esp";
 	const fs::path stale = data / "hot-stale.esp", save = data / "hot.ess", outside = root / "outside.bsa";
@@ -167,13 +173,20 @@ static int HotSetPhase(const fs::path& root, const std::wstring& phase, const fs
 	std::ofstream(plugins / "NextGenDiskCache.ini", std::ios::trunc) <<
 		"[FileCache]\nbEnableFileCacheHooks=1\niHookScope=0\nbPreferRandomAccessOnArchives=0\n"
 		"[Hardware]\nbHardwareProfile=0\nbAutoTune=0\n[WarmCache]\nbEnableWarmCache=0\n"
+		"bStopWarmCacheOnMemoryPressure=" << (noHeadroom ? 0 : 1) << "\n"
 		"[HotSet]\nbHotSetRecord=1\nbHotSetPrefetch=1\niHotSetBudgetMB=64\niHotSetThreads=2\n"
 		"iHotSetRecordSecs=1\niHotSetMaxSecs=10\n[Log]\nbLogToFile=1\nbLogToPluginDirectory=1\n";
 	const HMODULE dll = LoadLibraryW((plugins / "NextGenDiskCache.dll").c_str());
 	require(dll != nullptr, "actual DLL load failed");
-	if (phase == L"prefetch")
+	if (phase == L"prefetch") {
 		require(IatHookInstall(dll, "ReadFile", AllReadSpy, nullptr, 0, reinterpret_cast<void**>(&originalRead)) != nullptr,
 			"ReadFile spy not installed");
+		if (noHeadroom) {
+			require(IatHookInstall(dll, "GlobalMemoryStatusEx", MemorySpy, nullptr, 0,
+				reinterpret_cast<void**>(&originalMemory)) != nullptr, "memory spy not installed");
+			pressure.store(true);
+		}
+	}
 	const auto load = reinterpret_cast<bool(*)(const SKSEInterface*)>(GetProcAddress(dll, "SKSEPlugin_Load"));
 	SKSEInterface skse{}; skse.skseVersion = 0x02020800; skse.runtimeVersion = 0x01064920;
 	skse.QueryInterface = Query; skse.GetPluginHandle = Handle;
@@ -183,6 +196,16 @@ static int HotSetPhase(const fs::path& root, const std::wstring& phase, const fs
 		const std::string log = WaitForLog(logPath, "HotSet: prefetched");
 		require(log.find("HotSet: prefetched") != std::string::npos, "prefetch did not finish");
 		require(log.find("stale=1") != std::string::npos, "changed file was not reported stale");
+		if (noHeadroom) {
+			require(log.find("reason=RAM reserve reached") != std::string::npos,
+				"load cache ignored the RAM reserve when the warmer's memory guard was off");
+			std::lock_guard<std::mutex> lock(pathsMutex);
+			for (const auto& r : spyReads)
+				require(r.path.find(L"\\SKSE\\Plugins\\NextGenDiskCache.") != std::wstring::npos,
+					"load cache read game data without RAM headroom");
+			std::ofstream(root / "result.txt") << "Prefetch stopped at the RAM reserve.\n" << log;
+			return 0;
+		}
 		const std::vector<std::pair<uint32_t, uint32_t>> allowed = {{0, 1}, {48, 50}, {96, 97}, {112, 113}};
 		uint64_t bsaBytes = 0, nifBytes = 0, espBytes = 0;
 		std::lock_guard<std::mutex> lock(pathsMutex);
@@ -258,12 +281,22 @@ static int HotSetPhase(const fs::path& root, const std::wstring& phase, const fs
 	CloseHandle(reused);
 
 	Message(SKSEMessagingInterface::kMessage_DataLoaded);
-	Message(SKSEMessagingInterface::kMessage_PreLoadGame);
-	Message(SKSEMessagingInterface::kMessage_PostLoadGame);
-	const std::string log = WaitForLog(logPath, "HotSet: saved profile");
-	require(log.find("HotSet: saved profile") != std::string::npos, "profile was not saved after the load window");
-	require(log.find("Timing: game data loaded") != std::string::npos &&
-		log.find("Timing: save data loaded") != std::string::npos, "session timing missing");
+	std::string log;
+	if (menuOnly) {
+		// The player quits at the main menu: no save load, so the recording window
+		// never closes. Everything read so far must already be on disk.
+		const char* needle = "HotSet: checkpoint saved at the main menu";
+		log = WaitForLog(logPath, needle);
+		require(log.find(needle) != std::string::npos, "quitting at the main menu lost the recording");
+		require(log.find("Timing: game data loaded") != std::string::npos, "data-load timing missing");
+	} else {
+		Message(SKSEMessagingInterface::kMessage_PreLoadGame);
+		Message(SKSEMessagingInterface::kMessage_PostLoadGame);
+		log = WaitForLog(logPath, "HotSet: saved profile");
+		require(log.find("HotSet: saved profile") != std::string::npos, "profile was not saved after the load window");
+		require(log.find("Timing: game data loaded") != std::string::npos &&
+			log.find("Timing: save data loaded") != std::string::npos, "session timing missing");
+	}
 	const std::string text = Text(profile);
 	require(text.rfind("NGDC-HOTSET 1\ndata ", 0) == 0, "profile header missing");
 	require(text.find(" 0-1,48-50,96-97,112-113 hot.bsa\n") != std::string::npos, "archive ranges wrong (or reuse leaked)");
@@ -282,6 +315,7 @@ int wmain(int argc, wchar_t** argv) try
 	require(argc >= 4, "usage: CacheHost dll other-module mode [phase]");
 	const fs::path sourceDll = fs::absolute(argv[1]), sourceOther = fs::absolute(argv[2]);
 	const std::wstring mode = argv[3];
+	const bool hotset = mode.rfind(L"hotset", 0) == 0;
 	wchar_t exe[1024] = {};
 	require(GetModuleFileNameW(nullptr, exe, 1024) != 0, "host path failed");
 	if (argc == 4) {
@@ -290,7 +324,7 @@ int wmain(int argc, wchar_t** argv) try
 		const fs::path child = root / "CacheHost.exe";
 		fs::copy_file(exe, child, fs::copy_options::overwrite_existing);
 		DWORD code = 0;
-		for (const wchar_t* phase : mode == L"hotset" ? std::vector<const wchar_t*>{L"record", L"prefetch"}
+		for (const wchar_t* phase : hotset ? std::vector<const wchar_t*>{L"record", L"prefetch"}
 				: std::vector<const wchar_t*>{L"child"}) {
 			std::wstring command = L"\"" + child.wstring() + L"\" \"" + sourceDll.wstring() +
 				L"\" \"" + sourceOther.wstring() + L"\" " + mode + L" " + phase;
@@ -308,7 +342,7 @@ int wmain(int argc, wchar_t** argv) try
 		if (code) std::cerr << Text(root / "result.txt");
 		return static_cast<int>(code);
 	}
-	if (mode == L"hotset") return HotSetPhase(fs::path(exe).parent_path(), argv[4], sourceDll);
+	if (hotset) return HotSetPhase(fs::path(exe).parent_path(), argv[4], sourceDll, mode);
 	const fs::path root = fs::path(exe).parent_path(), data = root / "Data";
 	const fs::path plugins = data / "SKSE" / "Plugins";
 	fs::create_directories(plugins);

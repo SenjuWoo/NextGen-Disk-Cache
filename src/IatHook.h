@@ -23,5 +23,5 @@
 void* IatHookInstall(HMODULE module, const char* funcName, void* replacement,
 	char* foundInModule, size_t foundInModuleChars, void** originalBeforePublish = nullptr);
 
-// Restores a previously replaced entry. Safe to call with nullptr original.
-bool IatHookRemove(HMODULE module, const char* funcName, void* original);
+// There is deliberately no removal: SKSE never unloads plugins, and another
+// plugin may have chained its own hook onto ours after we installed it.

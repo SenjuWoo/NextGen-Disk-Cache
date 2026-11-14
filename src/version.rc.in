@@ -1,0 +1,32 @@
+// Generated from VERSION.txt by CMake. Shows the version in Explorer's file
+// properties and in crash reports that list module versions.
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Archost (Disk Cache Enabler); derivative maintained by SenjuWoo"
+            VALUE "FileDescription", "NextGen Disk Cache - SKSE64 learned load cache"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "NextGenDiskCache"
+            VALUE "LegalCopyright", "ISC License. Copyright 2023 Archost"
+            VALUE "OriginalFilename", "NextGenDiskCache.dll"
+            VALUE "ProductName", "NextGen Disk Cache"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

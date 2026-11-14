@@ -1,11 +1,16 @@
 param(
-    [string]$Version = "2.3.0",
+    # Defaults to VERSION.txt, the single version source. Passing a different value fails.
+    [string]$Version = "",
     [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
+
+$fileVersion = (Get-Content (Join-Path $root "VERSION.txt") -Raw).Trim()
+if (-not $Version) { $Version = $fileVersion }
+if ($Version -ne $fileVersion) { throw "-Version $Version does not match VERSION.txt ($fileVersion)" }
 
 if (-not $SkipBuild) {
     & (Join-Path $root "build.ps1")

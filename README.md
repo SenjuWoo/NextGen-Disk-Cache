@@ -8,7 +8,7 @@
 
 <p align="center">
   Configurable SKSE64 derivative of Disk Cache Enabler (Archost / enpinion, ISC).<br>
-  Version 2.3.0: learned load cache, load timing in the log, Safe by default.
+  Version 2.3.1: learned load cache, load timing in the log, Safe by default.
 </p>
 
 <p align="center">
@@ -45,12 +45,12 @@ Since 2.3.0 the plugin learns exactly which files, and which parts of each archi
 - files under the game's `Data` folder opened for reading only, with read sharing;
 - for `.bsa` / `.ba2` archives, the 64 KiB ranges that were actually read.
 
-Recording stops 90 seconds after the first save load (or new game). The result is merged with earlier sessions: files you have not touched for four launches drop out. It is written atomically to `NextGenDiskCache.hotset` beside the log.
+Recording stops 90 seconds after the first save load (or new game). The result is merged with earlier sessions: files you have not touched for four launches drop out. It is written atomically to `NextGenDiskCache.hotset` beside the log at three points: when the main menu appears, after the first save load, and when recording stops. Quitting at the main menu, a crash or a short test launch therefore keeps what was recorded up to then (before 2.3.1 such a session kept nothing).
 
 **Prefetch (next launch).** Before the game reads its plugins, the plugin reads the recorded data with separate read-only, fully shared handles, in first-use order:
 
 - 4 parallel reads on NVMe, 2 on SATA or unknown drives; skipped on hard disks, where parallel reads would fight the game's own seeks;
-- at most 1/8 of your RAM (512-4096 MB) by default; stops at the RAM reserve and after 120 seconds;
+- at most 1/8 of your RAM (512-4096 MB) by default; always stops at the RAM reserve (1-8 GB by RAM size, or `iWarmCacheReserveMB`) and after 120 seconds;
 - any file whose size or date changed since it was recorded (a mod update) is skipped, never guessed at.
 
 **Never recorded or read:** saves, cosaves, save backups, logs, temporary files, anything opened for writing, deleting or creating, files opened without read sharing, and anything outside `Data`. The profile is validated line by line when loaded; a path that could leave `Data` is rejected.
@@ -74,9 +74,11 @@ All settings live in `[HotSet]` and `[WarmCache]` of `NextGenDiskCache.ini`; eac
 Every log has timing lines:
 
 ```text
-Timing: game data loaded 81.3 s after the plugin loaded (main menu ready)
 HotSet: prefetched 2410 MB of 2410 MB planned (24120 files, stale=3, failures=0) in 1890 ms (1275 MB/s, 4 threads, cap 4056 MB); reason=complete
+Timing: game data loaded 81.3 s after the plugin loaded (main menu ready)
+HotSet: checkpoint saved at the main menu: 23950 files (23180 read so far, 412233 archive reads), 2300 MB to prefetch next launch
 Timing: save data loaded in 14.2 s (SKSE PreLoadGame to PostLoadGame; ...)
+HotSet: saved profile: 24310 files (24010 read this session, 520114 archive reads observed), 2440 MB to prefetch next launch
 ```
 
 (Example shape, not a measurement.) The gain is largest on a **cold boot**: restart Windows, launch, load the same save. Do that once with Safe and once with Minimal. The first Safe launch only records, so compare from the second launch on. A warm relaunch (no reboot) may show little difference because Windows may still hold the files.
@@ -109,7 +111,19 @@ Log and profile (GOG): `Documents\My Games\Skyrim Special Edition GOG\SKSE\`
 
 Delete `NextGenDiskCache.hotset` to make the plugin relearn from scratch (it also relearns by itself as your load order changes). `bLogToPluginDirectory=1` puts both files beside the DLL instead.
 
-When reporting an issue, include the complete log, profile choice, Skyrim and SKSE versions, storage type, and whether it happens without this plugin. Uninstall by removing the mod; saves are untouched.
+When reporting an issue, include the complete log, profile choice, Skyrim and SKSE versions, storage type, and whether it happens without this plugin. Uninstall by removing the mod; saves are untouched. The log and `NextGenDiskCache.hotset` stay in the SKSE log folder until you delete them.
+
+## Troubleshooting
+
+| Log says | Meaning |
+| --- | --- |
+| `HotSet: no profile for this Data folder yet` | First launch, the profile was deleted, or the game moved. This session records; the next launch prefetches. |
+| No `HotSet: checkpoint saved at the main menu` line | The game closed before the main menu, so nothing was kept. Reach the main menu once. |
+| `prefetch skipped` with `hard disk detected` | Parallel reads would fight the game's own seeks on an HDD. `iHotSetThreads=1` forces it. |
+| `reason=RAM reserve reached` | Free RAM fell to the reserve; prefetch stopped early instead of pushing the game into the page file. |
+| `reason=deadline` | `iHotSetMaxSecs` passed before the plan finished; the rest is read by the game as usual. |
+| `stale=N` | N files changed since they were recorded (mod updates). They are skipped and relearned. |
+| `IAT hook was not installed` | The executable does not import `CreateFileA`/`CreateFileW` by name; nothing is recorded. Report your Skyrim version. |
 
 ## Build
 
@@ -119,7 +133,9 @@ When reporting an issue, include the complete log, profile choice, Skyrim and SK
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-CI builds the exact release SHA and runs the policy checks plus an isolated Windows host against the actual DLL before packaging. The host test plays two sessions: it records real reads (sequential, seeked, positional and `ReadFileEx`), then checks that the next launch prefetched exactly those ranges, skipped a changed file, preserved the caller's last error and file position, and never recorded saves, writes, exclusive opens or files outside `Data`.
+`VERSION.txt` is the only place the version is written: CMake passes it to the DLL's SKSE metadata and version resource, and the packager and CI read it too. `tools/validate_rc.py` fails when the FOMOD or INI headers disagree with it.
+
+CI builds the exact release SHA and runs the policy checks plus an isolated Windows host against the actual DLL before packaging. The host test plays two sessions: it records real reads (sequential, seeked, positional and `ReadFileEx`), then checks that the next launch prefetched exactly those ranges, skipped a changed file, preserved the caller's last error and file position, and never recorded saves, writes, exclusive opens or files outside `Data`. Two more host modes check that quitting at the main menu still leaves a profile and that prefetch stops at the RAM reserve.
 
 ```text
 dumpbin /exports NextGenDiskCache.dll   →  only SKSEPlugin_Load/Query/Version
@@ -132,6 +148,7 @@ dumpbin /imports NextGenDiskCache.dll   →  SETUPAPI, KERNEL32, SHELL32 only
 src/main.cpp         SKSE entry, file hooks, flag policy, legacy warmer, timing
 src/HotSet.*         learned load cache: recorder, profile, parallel prefetch
 src/IatHook.*        executable-only import-table hooks
+src/version.rc.in    DLL version resource, generated from VERSION.txt
 profiles/            Safe / Minimal / Experimental INI
 fomod/               installer
 deps/                Detours + SKSE headers (compile)
@@ -143,8 +160,9 @@ tests/               policy and profile checks + isolated actual-DLL Windows hos
 
 Verified in this tree:
 
-- Version **2.3.0**; Safe / Minimal / Experimental as documented
-- Actual-DLL host checks for the load cache (record, prefetch, stale skip, exclusions, handle reuse, last error and file position) and for every 2.2.x warmer behaviour
+- Version **2.3.1**; Safe / Minimal / Experimental as documented
+- Actual-DLL host checks for the load cache (record, prefetch, stale skip, exclusions, handle reuse, last error and file position, quit at the main menu, RAM reserve) and for every 2.2.x warmer behaviour
+- 2.3.0 saved the profile only once the recording window closed, so a session that ended earlier kept nothing; an installed 2.3.0 with only short sessions had no profile at all. 2.3.1 also saves at the main menu and after the first save load
 - 2.2.1 in-game evidence (Skyrim 1.6.1170 / SKSE 2.2.8): 903,412,094 bytes warmed across 509 archives, zero failures; that same log is why Safe moved to the load cache
 
 Not yet measured:

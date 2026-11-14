@@ -1,6 +1,22 @@
 NextGen Disk Cache - Public Release History
 ===========================================
 
+2.3.1
+-----
+- Fixed: the learned load cache kept nothing from a session that ended before
+  the recording window closed (90 seconds after the first save load). Quitting
+  at the main menu, a crash or a short test launch recorded for minutes and
+  then threw it all away, so some installs never got a profile. The profile is
+  now also saved when the main menu appears and after the first save load.
+- Fixed: the load cache's prefetch always stops at the RAM reserve. Before, it
+  stopped only while the legacy warmer's bStopWarmCacheOnMemoryPressure was 1
+  (every shipped profile sets it to 1).
+- The DLL now carries a version resource, so Explorer and crash reports show
+  its version.
+- New Troubleshooting table in the README explains each HotSet log line.
+- No change to what is recorded or read, to the installer choices, or to any
+  INI default. Reinstall the full FOMOD to update.
+
 2.3.0
 -----
 - New: learned load cache (HotSet). Each session records which game files and
@@ -21,6 +37,23 @@ NextGen Disk Cache - Public Release History
   Windows file cache that Skyrim reads from, and the engine never issues
   DirectStorage requests, so it cannot speed up Skyrim. Old INI keys are ignored.
 - Saves, cosaves, writes and files outside Data are never recorded or read.
+
+2.2.1
+-----
+(First public release of the 2.2.0 work; 2.2.0 itself was never published.)
+- Safe now actively warms archives: after the game data loads, it reads the
+  archives Skyrim opened into the Windows file cache through separate
+  read-only handles, within session, per-archive, rate and time limits. It
+  pauses during save loads and stops at the RAM reserve.
+- Minimal is the warming-disabled comparison. Experimental keeps the wider
+  hooks and sampling options with larger limits.
+- The log separates completed reads from best-effort mapped requests and
+  always says why warming did nothing.
+- Fixed a misleading completion reason when free RAM changed after the work
+  was already done.
+- Confirmed active warming in a real Skyrim 1.6.1170 / SKSE 2.2.8 session
+  (903 MB across 509 archives, zero failures). A loading-time gain was not
+  measured.
 
 2.1.0
 -----
@@ -453,3 +486,14 @@ Notes:
 - Removed DirectStorageBackend, the SDK NuGet fetch in build.ps1 and CI, and LICENSE.DirectStorage-Code.txt. [DirectStorage] keys are ignored.
 - ObserveArchive dedupe uses a hash set; uncalled DetachHooks removed; DLL imports unchanged (SETUPAPI, KERNEL32, SHELL32).
 - Tests: HotSet unit checks in cache_policy; new host_hotset two-session actual-DLL test; legacy host modes pin the load cache off and pass unchanged.
+
+2.3.1 - 2026-11-14 audit fixes (parent: 2a31e74 / 2.3.0 + docs)
+----------------------------------------------------------------
+- Runtime evidence: an installed 2.3.0 (release DLL c13cff2d..., Skyrim 1.6.1170) had no NextGenDiskCache.hotset after weeks of sessions of 2-6 minutes; the last log ends at "no profile ... this session records one". HotSetCoordinator wrote the profile only after first PostLoadGame/NewGame + iHotSetRecordSecs, and DllMain cannot do file I/O at exit, so every session that ended earlier discarded its recording.
+- HotSetRecordSnapshot copies recorder state under a shared lock (writers wait for the copy only; size/mtime stamping runs after it, shared with HotSetRecordStop via ToEntries). HotSetCheckpoint saves at DataLoaded and at the first PostLoadGame/NewGame; the final save follows. Every save merges with the start-up profile, so an unread entry ages once per session. Checkpoint failures are logged and never stop the recording.
+- HotSetHeadroom calls the unconditional HasMemoryHeadroom; the warmer's bStopWarmCacheOnMemoryPressure opt-out applies to the warmer only.
+- VERSION.txt is the single version source: CMake file(STRINGS) -> project(VERSION) -> NGDC_VERSION_* defines (DLL and CachePolicyChecks) and a configured VERSIONINFO resource (src/version.rc.in). package-release.ps1, the workflow (NGDC_VERSION env) and validate_rc.py read it; the validator also checks the INI headers and the DLL's version resource.
+- build.ps1: unknown newer VS major -> CMake default generator instead of an exception; vswhere's folder is put on PATH before VsDevCmd (removes the spurious "'vswhere.exe' is not recognized" line).
+- Removed write-only g_hookAttachFailed/g_hooksAttached, uncalled IatHookRemove, tools/apply_1_2.py (patched DirectStorageBackend files deleted in 2.3.0) and BASE-COMMIT.txt.
+- Docs: public history gains 2.2.1 (it skipped from 2.3.0 to 2.1.0); README troubleshooting table (the bug-report form already pointed to it), checkpoint and RAM-reserve wording, uninstall leftovers; GITHUB.md describes the current branch/PR/release flow.
+- Tests: host_hotsetmenu (quit at the main menu: the checkpoint profile must exist and be prefetched exactly next launch) and host_hotsetpressure (prefetch must stop at the RAM reserve with bStopWarmCacheOnMemoryPressure=0). Both failed on 2.3.0 code. 16/16 CTest.
