@@ -158,7 +158,9 @@ std::unordered_map<HANDLE, uint32_t> g_recByHandle;
 ULONGLONG g_recStart = 0;
 uint64_t g_recArchiveReads = 0;
 size_t g_recRanges = 0;
-bool g_recTruncated = false;
+// Atomic: StopAfterResourceError sets it from a catch block, after the lock that
+// guarded the failed write has already been released by unwinding.
+std::atomic<bool> g_recTruncated{false};
 
 void StopAfterResourceError() noexcept
 {

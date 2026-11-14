@@ -3,14 +3,22 @@
 | | |
 |--|--|
 | **Repo** | https://github.com/SenjuWoo/NextGen-Disk-Cache |
-| **This folder** | git root (``origin`` should already point here) |
-| **Parent package** | ``..\`` version folders for ship zips |
+| **Default branch** | `main`, protected: pull request, required `build` check, conversations resolved |
+| **Version** | `VERSION.txt` (the only place it is written) |
 
-Current release snapshot: 2.3.0, linked worktree on `agent/hotset-2.3.0`.
-Canonical object store: sibling `source/`; do not create another repository.
-The existing origin URL redirects to `SenjuWoo/NextGen-Disk-Cache` (verified
-2026-09-29). Keep normal changes on a scoped branch and use a PR with the required
-`build` check; main is protected. Stage explicit reviewed source paths, never
-`git add -A`. GitHub publication and tagging were explicitly requested after CI passes. Nexus upload is not requested; prepare its verified package and user changelog. Game files remain read-only.
+## Change flow
 
-Exclude build artifacts. Keep LICENSE/upstream credit if any.
+1. Branch `agent/<topic>` or `release/<version>` from `main`; CI runs on both.
+2. `.\build.ps1`, `ctest --test-dir build -C Release --output-on-failure`, `.\package-release.ps1 -SkipBuild`.
+3. Open a pull request; the `build` job must pass on its head commit.
+4. Merge, then tag the merge commit `vX.Y.Z`.
+
+## Release
+
+- Assets come from the CI run on the tagged commit, unmodified: `NextGenDiskCache-X.Y.Z-FOMOD.zip`,
+  `NextGenDiskCache-X.Y.Z-SHA256.txt` and `NextGenDiskCache.pdb` (symbols, not needed to play).
+- The release notes state the exact commit, the test count and the ZIP and DLL SHA-256.
+- Nexus (mod 185563) is uploaded by hand; `docs/NEXUS-CHANGELOG-X.Y.Z.txt` holds its changelog text.
+
+Stage explicit, reviewed source paths (never `git add -A`). Build output (`build/`, `dist/`,
+`package/SKSE/Plugins/*.dll`) is ignored. Keep the Archost ISC licence and credits.

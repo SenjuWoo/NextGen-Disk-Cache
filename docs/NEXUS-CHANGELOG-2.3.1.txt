@@ -1,0 +1,9 @@
+2.3.1
+
+- Fixed: the learned load cache threw away everything from a session that ended before the recording window closed (90 seconds after your first save load). Quitting at the main menu, a crash or a short test launch kept nothing, so some installs never got a profile.
+- The profile is now saved when the main menu appears, after your first save load, and when recording ends.
+- Fixed: prefetch always stops at the RAM reserve, even if the old warmer's memory guard is switched off.
+- The DLL now shows its version in Windows file properties and crash reports.
+- New troubleshooting table on the GitHub page explains every load-cache log line.
+- Nothing changed in what is recorded or read, in the installer choices or in any INI default.
+- Reinstall the full FOMOD to update.

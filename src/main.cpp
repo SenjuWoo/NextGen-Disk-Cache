@@ -33,6 +33,10 @@
 // The DirectStorage backend was removed: its reads bypass the Windows file
 // cache Skyrim reads from, so it could never speed the game up.
 //
+// 2.3.1: the profile is also checkpointed at the main menu and after the first
+// save load, so a session that ends before the recording window closes keeps
+// what it recorded. The load cache's RAM stop no longer depends on a warmer key.
+//
 // 1.1.0: hardware profiler (X3D / L3 topology, DDR generation + speed via
 // SMBIOS, NVMe/SATA/HDD game drive, GPU BAR size -> Resizable BAR state),
 // bounded optional warm cache with PrefetchVirtualMemory, low I/O

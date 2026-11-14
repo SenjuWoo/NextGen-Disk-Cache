@@ -1,4 +1,15 @@
-# NextGen Disk Cache 2.3.0 learned load cache
+# NextGen Disk Cache 2.3.1 audit fixes
+
+Parent: 2a31e74 (main; 2.3.0 release plus docs). Evidence: an installed 2.3.0 had no `.hotset` after many short sessions; the profile was written only after the recording window closed.
+
+- Checkpoint saves at DataLoaded and after the first PostLoadGame/NewGame (`HotSetRecordSnapshot`, `HotSetCheckpoint`), then the final save; all merge with the start-up profile.
+- HotSet prefetch always honours the RAM reserve (`HasMemoryHeadroom`), independent of the warmer's opt-out key.
+- `VERSION.txt` is the single version source (CMake defines, VERSIONINFO resource, packager, CI, validator).
+- build.ps1 survives an unknown newer Visual Studio and no longer prints the vswhere error.
+- Removed dead code (`g_hookAttachFailed`, `g_hooksAttached`, `IatHookRemove`, `tools/apply_1_2.py`, `BASE-COMMIT.txt`).
+- Tests: `host_hotsetmenu`, `host_hotsetpressure` (both red on 2.3.0 code); 16/16 CTest.
+
+## Historical 2.3.0 learned load cache
 
 Parent: d91f528 (main; 2.2.1 release fe2969e plus README link update). Audit evidence: the user's 2026-10-21 Safe session on Skyrim 1.6.1170 / SKSE 2.2.8 with the 2.2.1 CI DLL installed: patched=0 over 54,784 opens, the warmer split 1024 MB into ~2 MB per archive across 509 archives and started 15 s after DataLoaded, which itself arrived ~80 s after plugin load.
 
