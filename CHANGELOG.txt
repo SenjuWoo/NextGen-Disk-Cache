@@ -1,6 +1,13 @@
 NextGen Disk Cache - Public Release History
 ===========================================
 
+Unreleased (repository documentation only)
+------------------------------------------
+- README rebuilt with a cover image and real test and packaging output.
+  No change to the DLL, the INI profiles or the installer; 2.3.1 stays current.
+- Old 1.x entries below: removed per-entry tool lines and repaired garbled
+  dashes.
+
 2.3.1
 -----
 - Fixed: the learned load cache kept nothing from a session that ended before
@@ -227,7 +234,6 @@ NextGen Disk Cache 1.4.0 - Safety Rework
 
 ================================================================================
 ## [1.3.1] - 2026-07-20
-Agent: Claude
 Intent: Fix DirectStorage runtime detection in the real game layout; restrict
         the CreateFile cache policy to buffered read handles.
 Root cause (DirectStorage):
@@ -273,7 +279,6 @@ plugin + runtime in Data\SKSE\Plugins - the layout SKSE actually produces):
     vector removal, not a confirmed reproduction - crash log requested.
 ================================================================================
 ## [1.3.0] - 2026-07-18
-Agent: Kimi
 Intent: Manual game-drive class override for RAID / Storage Spaces / USB setups.
 Root cause:
   - Drive class comes from seek-penalty + bus-type IOCTLs on the game volume.
@@ -297,7 +302,6 @@ Validation:
 
 ================================================================================
 ## [1.2.1] - 2026-07-18
-Agent: Kimi
 Intent: Compatibility hotfix for durability-focused save/cosave writers.
 Root cause:
   - 1.2.0 classified .ess/.bak/.skse/.cosave as game assets. PatchFlags then
@@ -333,7 +337,6 @@ Changes:
   - Restricted forced RANDOM_ACCESS to known game-asset extensions.
   - Replaced unsafe exit-time logging with a post-warm statistics snapshot.
   - Added VS2022 GitHub Actions build, separate symbols, SHA-256, and FOMOD staging.
-Agent: GPT (source overlay) / Claude + Kimi (build, fixes, validation, release)
 Validation (2026-07-18, target rig: 9800X3D / 32 GB DDR5-6000 / RTX 4080 SUPER):
   - tools/validate_rc.py PASS, idempotent; full --repo dry-run from the 1.1.0
     base commit PASS (apply overlay -> validate transformed checkout).
@@ -347,13 +350,12 @@ Validation (2026-07-18, target rig: 9800X3D / 32 GB DDR5-6000 / RTX 4080 SUPER):
     PDB/LIB/OBJ/EXP in the public payload; symbols stage to build/symbols.
 ================================================================================
 
-# CHANGELOG â€” NextGen Disk Cache
+# CHANGELOG — NextGen Disk Cache
 # One living file. Do not delete old entries.
 
 ================================================================================
-## [1.1.0] â€” 2026-07-16
-Agent: Claude
-Intent: Modern-hardware feature update â€” detect + adapt to X3D CPUs, Resizable
+## [1.1.0] — 2026-07-16
+Intent: Modern-hardware feature update — detect + adapt to X3D CPUs, Resizable
         BAR, DDR5, NVMe/SSD storage; smarter warm cache; DllMain safety fix.
 Files changed:
   - source/src/main.cpp (version 1.1.0; all features below)
@@ -361,7 +363,7 @@ Files changed:
   - source/package/SKSE/Plugins/NextGenDiskCache.ini ([Hardware] section;
     iWarmCacheBudgetMB / iWarmCacheThreads / bWarmCacheMappedPrefetch /
     bWarmCacheLowIoPriority)
-  - source/README.md ("1.1.0 â€” modern hardware support" table)
+  - source/README.md ("1.1.0 — modern hardware support" table)
   - NextGen Disk Cache 1.1.0/SKSE/Plugins/NextGenDiskCache.dll (348160 bytes)
   - NextGen Disk Cache 1.1.0/SKSE/Plugins/NextGenDiskCache.ini + .pdb + README.md
 New features:
@@ -379,7 +381,7 @@ New features:
     IoPriorityHintLow on warm handles; EcoQoS allowed on warm threads.
   - bPreferFastCores (default OFF): SetProcessDefaultCpuSets soft hint to
     V-Cache CCD (dual-CCD X3D) or P-cores (Intel hybrid).
-  - Fixes: MessageBoxA removed from DllMain (loader-lock deadlock risk â€”
+  - Fixes: MessageBoxA removed from DllMain (loader-lock deadlock risk —
     now logged instead); ClassifyPathW no longer truncates long paths (wide
     extension extraction); warm budget RAM tiers carry slack for reserved
     memory (31.8 GiB "32 GB" kits); log strings pure ASCII (no mojibake);
@@ -398,15 +400,14 @@ Verify:
     auto-tune plan budget 3604 MB / 3 threads / mapped prefetch; warmed
     32 MB across 3 files; clean exit stats. Hooks attach/detach clean.
   - UNPROVEN: in-game run under real SKSE (user will test).
-  - Zip: NextGenDiskCache-1.1.0.zip (SHA256 D25FCFB8â€¦66C6A9BA)
+  - Zip: NextGenDiskCache-1.1.0.zip (SHA256 D25FCFB8…66C6A9BA)
 Nexus: NO
 Notes:
   - branched from NextGen Disk Cache 1.0.1
   - SHIP GATE: N/A (DLL-only, no ESP)
   - source/.git not committed (user did not request a commit)
 ================================================================================
-## [1.0.1] â€” 2026-07-16
-Agent: Grok
+## [1.0.1] — 2026-07-16
 Intent: ISC license compliance + correct credits for Disk Cache Enabler derivative
 Files changed:
   - LICENSE.txt (canonical full ISC Copyright 2023 Archost + Created by / Uploaded by)
@@ -425,8 +426,7 @@ Nexus: NO
 Notes:
   - 1.0.0 folder left intact
 ================================================================================
-## [1.0.0] â€” 2026-07-16
-Agent: Grok
+## [1.0.0] — 2026-07-16
 Intent: Ship enhanced Disk Cache Enabler successor for modern SSD/RAM PCs;
         do NOT touch Fast*/Faster* author binaries.
 Files changed:
@@ -440,7 +440,7 @@ Why / root cause:
   - Original DiskCacheEnabler only hooked CreateFileA, stripped NO_BUFFERING,
     forced RANDOM_ACCESS; no CreateFileW, no process hints, no warm-cache,
     printf spam if console enabled.
-  - User wanted hardware-aware gains; ReBAR/XMP/x3D are BIOS-level â€” documented
+  - User wanted hardware-aware gains; ReBAR/XMP/x3D are BIOS-level — documented
     honestly; software does OS file-cache + EcoQoS + warm read.
 Verify:
   - cmake + MSVC 19.51 Release â†’ NextGenDiskCache.dll (331776 bytes) BUILD OK
