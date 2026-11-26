@@ -339,7 +339,12 @@ int wmain(int argc, wchar_t** argv) try
 			if (code) break;
 		}
 		std::wcout << L"HOST " << mode << (code == 0 ? L" PASS\n" : L" FAIL\n");
-		if (code) std::cerr << Text(root / "result.txt");
+		if (code) {
+			// A child that crashes (SEH, not std::exception) or times out leaves result.txt
+			// empty; the exit code (e.g. 0xC0000005, or 2 for the 20 s timeout) is the only clue.
+			std::cerr << "child exit code 0x" << std::hex << code << std::dec << " (" << code << ")\n";
+			std::cerr << Text(root / "result.txt");
+		}
 		return static_cast<int>(code);
 	}
 	if (hotset) return HotSetPhase(fs::path(exe).parent_path(), argv[4], sourceDll, mode);
